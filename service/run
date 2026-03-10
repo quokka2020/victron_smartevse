@@ -1,0 +1,5 @@
+#!/bin/sh
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+exec 2>&1
+$(realpath $SCRIPT_DIR/../victron_smartevse -envfile $SCRIPT_DIR/../smartevse.env)

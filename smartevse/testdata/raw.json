@@ -1,0 +1,138 @@
+{
+    "version": "v3.10.0",
+    "serialnr": 9999,
+    "mode": "SOLAR",
+    "mode_id": 2,
+    "car_connected": true,
+    "wifi": {
+        "status": "WL_CONNECTED",
+        "ssid": "IoT",
+        "rssi": -72,
+        "bssid": "AA:AA:AA:AA:AA:AA"
+    },
+    "evse": {
+        "temp": 17,
+        "temp_max": 65,
+        "connected": true,
+        "access": 1,
+        "mode": 2,
+        "loadbl": 0,
+        "pwm": 1024,
+        "custombutton": false,
+        "solar_stop_timer": 0,
+        "state": "Charging Stopped - No Power Available",
+        "state_id": 9,
+        "error": "None",
+        "error_id": 0,
+        "rfidreader": "Disabled",
+        "nrofphases": 3,
+        "rfid": "Not Installed"
+    },
+    "settings": {
+        "charge_current": 60,
+        "override_current": 0,
+        "current_min": 6,
+        "current_max": 13,
+        "current_main": 25,
+        "current_max_circuit": 16,
+        "current_max_sum_mains": 600,
+        "max_sum_mains_time": 0,
+        "solar_max_import": 1,
+        "solar_start_current": 5,
+        "solar_stop_time": 1,
+        "enable_C2": "Not present",
+        "mains_meter": "API",
+        "starttime": 0,
+        "stoptime": 0,
+        "repeat": 0,
+        "lcdlock": 0,
+        "lock": 0,
+        "cablelock": 0
+    },
+    "mqtt": {
+        "host": "192.168.0.1",
+        "port": 1883,
+        "topic_prefix": "SmartEVSE",
+        "username": "",
+        "password_set": false,
+        "tls": false,
+        "status": "Connected",
+        "smartevse_server": false
+    },
+    "ocpp": {
+        "mode": "Disabled",
+        "backend_url": "",
+        "cb_id": "",
+        "auth_key": "",
+        "auto_auth": "Disabled",
+        "auto_auth_idtag": "",
+        "status": "Disconnected"
+    },
+    "home_battery": {
+        "current": 0,
+        "last_update": 0
+    },
+    "ev_meter": {
+        "description": "InvEastrn",
+        "address": 12,
+        "import_active_power": 0,
+        "total_wh": 3255525,
+        "charged_wh": 6721,
+        "currents": {
+            "TOTAL": 0,
+            "L1": 0,
+            "L2": 0,
+            "L3": 0
+        },
+        "import_active_energy": 3255525,
+        "export_active_energy": 0
+    },
+    "mains_meter": {
+        "import_active_energy": 0,
+        "export_active_energy": 0
+    },
+    "phase_currents": {
+        "TOTAL": 139,
+        "L1": 22,
+        "L2": 4,
+        "L3": 113,
+        "last_data_update": 1768066349,
+        "original_data": {
+            "TOTAL": 139,
+            "L1": 22,
+            "L2": 4,
+            "L3": 113
+        }
+    },
+    "backlight": {
+        "timer": 0,
+        "status": "OFF"
+    },
+    "color": {
+        "off": {
+            "R": 0,
+            "G": 0,
+            "B": 0
+        },
+        "normal": {
+            "R": 0,
+            "G": 255,
+            "B": 0
+        },
+        "smart": {
+            "R": 0,
+            "G": 255,
+            "B": 0
+        },
+        "solar": {
+            "R": 255,
+            "G": 170,
+            "B": 0
+        },
+        "custom": {
+            "R": 0,
+            "G": 0,
+            "B": 255
+        }
+    }
+}
