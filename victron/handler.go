@@ -9,16 +9,17 @@ import (
 )
 
 type VictronHandler struct {
-	dbusconn     *dbus.Conn
+	dbusconn     DBusConn
 	stop_channel chan struct{}
 	services     []*Service
 
-	grid_l1_i LastFloat
-	grid_l2_i LastFloat
-	grid_l3_i LastFloat
-	grid_l1_v LastFloat
-	grid_l2_v LastFloat
-	grid_l3_v LastFloat
+	grid_l1_i      LastFloat
+	grid_l2_i      LastFloat
+	grid_l3_i      LastFloat
+	grid_l1_v      LastFloat
+	grid_l2_v      LastFloat
+	grid_l3_v      LastFloat
+	grid_connected LastFloat
 
 	consumption_l1_i LastFloat
 	consumption_l2_i LastFloat
@@ -32,18 +33,20 @@ type VictronHandler struct {
 }
 
 func NewVictronHandler() (*VictronHandler, error) {
-	var err error
-	handler := VictronHandler{
-		stop_channel: make(chan struct{}),
-		services:     []*Service{},
-	}
-
-	handler.dbusconn, err = dbus.ConnectSystemBus()
+	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return nil, err
 	}
+	return NewVictronHandlerWithConn(conn), nil
+}
 
-	return &handler, err
+func NewVictronHandlerWithConn(conn DBusConn) *VictronHandler {
+	handler := VictronHandler{
+		dbusconn:     conn,
+		stop_channel: make(chan struct{}),
+		services:     []*Service{},
+	}
+	return &handler
 }
 
 func (handler *VictronHandler) Close() error {
@@ -99,19 +102,19 @@ func (handler *VictronHandler) Listen() {
 	for {
 		select {
 		case message := <-signals:
-			// log.Printf("Name:%s Path:%s Body:%d", message.Name, message.Path, len(message.Body))
-			// for i,val:=range message.Body {
-			// 	log.Printf("%d: %v %v",i,reflect.TypeOf(val), val)
-			// }
+			//log.Printf("Name:%s Path:%s Body:%d", message.Name, message.Path, len(message.Body))
+			//for i, val := range message.Body {
+			//	log.Printf("%d: %v %v", i, reflect.TypeOf(val), val)
+			//}
 			if len(message.Body) == 1 {
 				if m, ok := message.Body[0].(map[string]map[string]dbus.Variant); ok {
 					handler.handle_dbus_signal_message(m)
 
-					// for kk,mm := range m {
-					// 	for kkk,mmm := range mm {
-					// 		log.Printf(".  kk=%s kkk=%s v=:%v",kk,kkk,mmm)
-					// 	}
-					// }
+					//for kk, mm := range m {
+					//	for kkk, mmm := range mm {
+					//		log.Printf(".  kk=%s kkk=%s v=:%v", kk, kkk, mmm)
+					//	}
+					//}
 				}
 			}
 		case <-handler.stop_channel:
@@ -124,10 +127,26 @@ func (handler *VictronHandler) Listen() {
 
 func (h *VictronHandler) Grid() (float64, float64, float64) {
 	return h.grid_l1_i.lastValue, h.grid_l2_i.lastValue, h.grid_l3_i.lastValue
+
+	//if h.grid_connected.lastValue != 0 {
+	//	return h.grid_l1_i.lastValue, h.grid_l2_i.lastValue, h.grid_l3_i.lastValue
+	//}
+	//
+	//return h.Consumption()
+}
+
+func (h *VictronHandler) Consumption() (float64, float64, float64) {
+	return h.consumption_l1_i.lastValue, h.consumption_l2_i.lastValue, h.consumption_l3_i.lastValue
+}
+
+func (h *VictronHandler) SetConsumptionVoltages(l1, l2, l3 float64) {
+	h.consumption_l1_v.lastValue = l1
+	h.consumption_l2_v.lastValue = l2
+	h.consumption_l3_v.lastValue = l3
 }
 
 func (h *VictronHandler) BatteryCurrent() float64 {
-	avg_v := (h.grid_l1_v.lastValue + h.grid_l2_v.lastValue + h.grid_l3_v.lastValue) / 3
+	avg_v := (h.consumption_l1_v.lastValue + h.consumption_l2_v.lastValue + h.consumption_l3_v.lastValue) / 3
 	battery_p := h.battery_v.lastValue * h.battery_i.lastValue
 	// log.Printf("avg_v:%f battery_p:%f b_i:%f b_b:%f l1:%f l2:%f l3:%f",avg_v,battery_p, h.battery_v.lastValue, h.battery_i.lastValue,h.grid_l1_v.lastValue,h.grid_l2_v.lastValue,h.grid_l3_v.lastValue)
 	return battery_p / avg_v
@@ -140,6 +159,7 @@ func (handler *VictronHandler) handle_dbus_signal_message(msg map[string]map[str
 	handler.grid_l1_v.Change(value(msg, "/Ac/ActiveIn/L1/V"))
 	handler.grid_l2_v.Change(value(msg, "/Ac/ActiveIn/L2/V"))
 	handler.grid_l3_v.Change(value(msg, "/Ac/ActiveIn/L3/V"))
+	handler.grid_connected.Change(value(msg, "/Ac/ActiveIn/Connected"))
 
 	handler.consumption_l1_i.Change(value(msg, "/Ac/Out/L1/I"))
 	handler.consumption_l2_i.Change(value(msg, "/Ac/Out/L2/I"))
@@ -167,6 +187,9 @@ func value(msg map[string]map[string]dbus.Variant, key string) *float64 {
 	if value, ok := v.Value().(float64); ok {
 		return &value
 	} else if value, ok := v.Value().(int32); ok {
+		float := float64(value)
+		return &float
+	} else if value, ok := v.Value().(uint32); ok {
 		float := float64(value)
 		return &float
 	}

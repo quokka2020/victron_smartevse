@@ -19,8 +19,8 @@ type part_service_wrapper struct {
 }
 
 // dbus signature a{sa{sv}}
-func (s *service_wrapper) GetItems() (map[string]map[string]any, *dbus.Error) {
-	out := make(map[string]map[string]any)
+func (s *service_wrapper) GetItems() (map[string]map[string]dbus.Variant, *dbus.Error) {
+	out := make(map[string]map[string]dbus.Variant)
 
 	s.service.mu.Lock()
 	items := maps.Clone(s.service.bus_items)
@@ -40,9 +40,9 @@ func (s *service_wrapper) GetItems() (map[string]map[string]any, *dbus.Error) {
 		}
 
 		// Note with leading /
-		out[path] = map[string]any{
+		out[path] = map[string]dbus.Variant{
 			"Value": val,
-			"Text":  text,
+			"Text":  dbus.MakeVariant(text),
 		}
 	}
 
@@ -81,7 +81,7 @@ func (s *part_service_wrapper) GetText() (map[string]string, *dbus.Error) {
 	return out, nil
 }
 
-func (s *service_wrapper) GetValue() (map[string]any, *dbus.Error) {
+func (s *service_wrapper) GetValue() (map[string]dbus.Variant, *dbus.Error) {
 	part := part_service_wrapper{
 		service: s.service,
 		path:    "/",
@@ -89,8 +89,8 @@ func (s *service_wrapper) GetValue() (map[string]any, *dbus.Error) {
 	return part.GetValue()
 }
 
-func (s *part_service_wrapper) GetValue() (map[string]any, *dbus.Error) {
-	out := map[string]any{}
+func (s *part_service_wrapper) GetValue() (map[string]dbus.Variant, *dbus.Error) {
+	out := map[string]dbus.Variant{}
 
 	s.service.mu.Lock()
 	items := maps.Clone(s.service.bus_items)

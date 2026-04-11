@@ -7,7 +7,7 @@ echo "Restarting $SERVICE_NAME..."
 
 pid=$(pgrep -f "$SCRIPT_DIR/$SERVICE_NAME")
 if [ -n "$pid" ]; then
-    svc -t /service/$SERVICE_NAME
+    svc -d /service/$SERVICE_NAME
     pkill -f "$SCRIPT_DIR/$SERVICE_NAME" > /dev/null 2>&1
     echo "done."
 else
