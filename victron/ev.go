@@ -23,7 +23,12 @@ com.victronenergy.evcharger
 /AutoStart                 --> Read/Write: Start automatically (number)
     0 = Charger autostart disabled
     1 = Charger autostart enabled
-/ChargingTime              --> Write: Total charging time (seconds)
+/ChargingTime              <-- Session charging time (seconds) - DEPRECATED
+/Session/Time              <-- Session charging time (seconds)
+/Session/Energy            <-- Session charging energy (kWh)
+/Session/Cost              <-- Session cost (no currency)
+/Session/SavedCost         <-- Optional: Session saved cost (no currency)
+
 /EnableDisplay             --> Read/Write: Lock charger display (number)
     0 = Control disabled
     1 = Control enabled
@@ -65,6 +70,8 @@ com.victronenergy.evcharger
     22 = Switching to 3-phase
     23 = Switching to 1-phase
     24 = Stop charging
+/IsGenericEnergyMeter      <-- The device measuring the EVSE is a generic energy meter (lacks
+                               EVSE specific functions such as StartStop)
 */
 
 type Victron_EV_Charger struct {
@@ -84,7 +91,8 @@ type Victron_EV_Charger struct {
 	set_current MinMaxUnitBusItem
 	max_current MinMaxUnitBusItem
 
-	energy_charged UnitBusItem
+	session_time   UnitBusItem
+	session_energy UnitBusItem
 	total_charged  UnitBusItem
 
 	temperature UnitBusItem
@@ -94,7 +102,7 @@ type Victron_EV_Charger struct {
 	autostart EvAutoStartBusItem
 }
 
-func (handler *VictronHandler) CreateEvChanger(serial int, version, connection string, min, current, max float64, charged float64, total float64) (*Victron_EV_Charger, error) {
+func (handler *VictronHandler) CreateEvChanger(serial int, version, connection string, min, current, max float64, session_energy float64, total float64) (*Victron_EV_Charger, error) {
 	var err error
 
 	ev := Victron_EV_Charger{
@@ -110,7 +118,8 @@ func (handler *VictronHandler) CreateEvChanger(serial int, version, connection s
 		current:        NewUnitFormatterObject(current, "A", 1),
 		set_current:    NewMinMaxUnitBusItem(current, min, max, "A", 0),
 		max_current:    NewMinMaxUnitBusItem(max, min, max, "A", 0),
-		energy_charged: NewUnitFormatterObject(charged, "kWh", 3),
+		session_time:   NewUnitFormatterObject(0, "s", 3),
+		session_energy: NewUnitFormatterObject(session_energy, "kWh", 3),
 		total_charged:  NewUnitFormatterObject(total, "kWh", 3),
 
 		temperature: NewUnitFormatterObject(20, "C", 0),
@@ -170,7 +179,8 @@ func (handler *VictronHandler) CreateEvChanger(serial int, version, connection s
 		"/Current":           &ev.current,
 		"/SetCurrent":        &ev.set_current,
 		"/MaxCurrent":        &ev.max_current,
-		"/Session/Energy":    &ev.energy_charged,
+		"/Session/Energy":    &ev.session_energy,
+		"/Session/Time":      &ev.session_time,
 		"/Ac/Energy/Forward": &ev.total_charged,
 		"/MCU/Temperature":   &ev.temperature,
 		"/AutoStart":         &ev.autostart,
@@ -251,9 +261,14 @@ func (ev *Victron_EV_Charger) ChangeChargeCurrent(current float64) {
 	ev.current.change(current)
 }
 
+// in seconds
+func (ev *Victron_EV_Charger) EnergyTime(seconds int64) {
+	ev.session_time.change(float64(seconds))
+}
+
 // in kWh
 func (ev *Victron_EV_Charger) EnergyCharged(energy float64) {
-	ev.energy_charged.change(energy)
+	ev.session_energy.change(energy)
 }
 
 // in kWh

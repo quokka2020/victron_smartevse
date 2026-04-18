@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"victron_smartevse/victron"
 
 	"github.com/hashicorp/mdns"
@@ -43,6 +44,9 @@ type SmartEVSE struct {
 	mode        string
 	evplugstate string
 	state       string
+
+	session_time      int64
+	last_session_time int64
 }
 
 var cfg_smartevse_ips = util.GetEnv("SMARTEVSE_IPS", "")
@@ -144,6 +148,9 @@ func (ev *SmartEVSE) load_info() error {
 	ev.current_min = raw.Settings.Current_Min
 	ev.current = raw.Settings.Charge_Current / 10
 	ev.current_max = raw.Settings.Current_Max
+
+	ev.session_time = 0
+	ev.last_session_time = 0
 	return nil
 }
 
@@ -206,6 +213,9 @@ func (ev *SmartEVSE) mqtt_received(topic string, value string) {
 	if update_state {
 		if ev.evplugstate == "Disconnected" {
 			ev.victron_ev.ChangeStatus(victron.EV_Status_Disconnected)
+			ev.session_time = 0
+			ev.last_session_time = 0
+			ev.victron_ev.EnergyTime(ev.session_time)
 		} else {
 			switch ev.state {
 			case "Charging":
@@ -249,6 +259,14 @@ func (ev *SmartEVSE) mqtt_received(topic string, value string) {
 	switch sub {
 	case "EVCurrentL1":
 		ev.victron_ev.ChangeCurrentL1(i / 10)
+		if i/10 > 0 {
+			now:=time.Now().Unix()
+			if ev.last_session_time > 0 {
+				ev.session_time += (now - ev.last_session_time)
+				ev.victron_ev.EnergyTime(ev.session_time)
+			}
+			ev.last_session_time = now
+		}
 	case "EVCurrentL2":
 		ev.victron_ev.ChangeCurrentL2(i / 10)
 	case "EVCurrentL3":

@@ -19,8 +19,6 @@ type Service struct {
 	deviceInstance int
 	deviceName     string
 	deviceClass    string
-
-	items_changed map[string]map[string]dbus.Variant
 }
 
 var nonAlphanumberic = regexp.MustCompile("[^a-zA-Z0-9]+")
@@ -47,7 +45,6 @@ func (handler *VictronHandler) NewService(name string) (*Service, error) {
 		deviceName:     deviceName,
 		deviceClass:    deviceClass,
 		deviceInstance: -1,
-		items_changed:  map[string]map[string]dbus.Variant{},
 	}
 
 	return s, nil
