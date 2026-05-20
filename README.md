@@ -146,7 +146,6 @@ Example:
 MQTT_BROKER=tcp://127.0.0.1:1883
 MQTT_USER=
 MQTT_PASSWD=
-LOG_FILE=/tmp/smartevse.log
 # SMARTEVSE_IPS=192.168.1.50
 ```
 
@@ -176,7 +175,9 @@ svstat /service/victron_smartevse
 Check logs:
 
 ```bash
-cat /tmp/smartevse.log
+tail -n 100 -F /data/log/victron_smartevse/current | tai64nlocal
+# or if you specified a different log-file
+cat <the value of LOG_FILE environment varaible in the smartevse.env>
 ```
 
 ---
@@ -295,3 +296,4 @@ Especially useful for:
 
 * Brian Akins who wrote [go-velib](https://github.com/bakins/go-velib)
 * mr-manuel who wrote [venus-os_dbus-mqtt-ev-charger](https://github.com/mr-manuel/venus-os_dbus-mqtt-ev-charger)
+* Koen de Laat for his contribution to this repo

@@ -19,7 +19,7 @@ import (
 )
 
 var mqtt_prefix = util.GetEnv("MQTT_PREFIX", "victron_smartevse")
-var log_file = util.GetEnv("LOG_FILE", "/tmp/smartevse.log")
+var log_file = util.GetEnv("LOG_FILE", "")
 
 func main() {
 	if log_file != "" {

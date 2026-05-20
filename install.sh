@@ -11,6 +11,7 @@ chmod 755 $SCRIPT_DIR/restart.sh
 chmod 755 $SCRIPT_DIR/stop.sh
 
 chmod 755 $SCRIPT_DIR/service/run
+chmod 755 $SCRIPT_DIR/service/log/run
 
 if [ ! -L /service/$SERVICE_NAME ]; then
     echo "Creating service..."
