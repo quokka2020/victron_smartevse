@@ -3,6 +3,7 @@ package victron
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -64,9 +65,64 @@ func (s *Service) Close() error {
 }
 
 func (s *Service) GetOrCreateDeviceInstance() (int, error) {
-	// TODO create in settings
-	s.deviceInstance = 1
-	return s.deviceInstance, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.deviceInstance != -1 {
+		return s.deviceInstance, nil
+	}
+
+	getDeviceInstance := func() (int, error) {
+		obj := s.parent.dbusconn.Object("com.victronenergy.settings",
+			dbus.ObjectPath("/Settings/Devices/"+s.deviceName+"/ClassAndVrmInstance"))
+
+		var value string
+		if err := obj.Call("GetValue", 0).Store(&value); err != nil {
+			return 0, fmt.Errorf("failed to get value: %w", err)
+		}
+
+		parts := strings.Split(value, ":")
+
+		if len(parts) != 2 {
+			return 0, fmt.Errorf("unexpected value %q", value)
+		}
+
+		return strconv.Atoi(parts[1])
+	}
+
+	deviceInstance, err := getDeviceInstance()
+	if err != nil {
+		deviceInstance = 1
+	}
+
+	// See https://github.com/victronenergy/localsettings?tab=readme-ov-file#using-addsetting-to-allocate-a-vrm-device-instance
+	var result int
+	err = s.parent.dbusconn.Object("com.victronenergy.settings", "/Settings/Devices").Call(
+		"AddSetting",
+		0,
+		s.deviceName,          // group
+		"ClassAndVrmInstance", // name
+		dbus.MakeVariant(fmt.Sprintf("%s:%d", s.deviceClass, deviceInstance)), // defaultValue
+		"s",                  // itemType
+		dbus.MakeVariant(""), // minimum
+		dbus.MakeVariant(""), // maximum
+	).Store(&result)
+	if err != nil {
+		return -1, fmt.Errorf("failed to store result: %w", err)
+	}
+
+	if result != 0 {
+		return -1, fmt.Errorf("unexpected result %d", result)
+	}
+
+	deviceInstance, err = getDeviceInstance()
+	if err != nil {
+		return -1, fmt.Errorf("failed to get device instance: %w", err)
+	}
+
+	s.deviceInstance = deviceInstance
+
+	return deviceInstance, nil
 }
 
 func (s *Service) Register() error {
@@ -253,7 +309,7 @@ func (s *Service) PropertiesChanged(item BusItem) error {
 	value, _ := item.GetValue()
 	text, _ := item.GetText()
 	payload := map[string]dbus.Variant{
-		"Value": dbus.MakeVariant(value),
+		"Value": value,
 		"Text":  dbus.MakeVariant(text),
 	}
 	return s.parent.dbusconn.Emit(
@@ -269,7 +325,7 @@ func (s *Service) emitItemsChanged(modifyable_items map[string]BusItem) {
 		value, _ := item.GetValue()
 		text, _ := item.GetText()
 		items[string(item.getObjectPath())] = map[string]dbus.Variant{
-			"Value": dbus.MakeVariant(value),
+			"Value": value,
 			"Text":  dbus.MakeVariant(text),
 		}
 	}

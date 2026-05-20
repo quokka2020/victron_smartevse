@@ -19,7 +19,7 @@ import (
 )
 
 var mqtt_prefix = util.GetEnv("MQTT_PREFIX", "victron_smartevse")
-var log_file = util.GetEnv("LOG_FILE", "")
+var log_file = util.GetEnv("LOG_FILE", "/tmp/smartevse.log")
 
 func main() {
 	if log_file != "" {
@@ -41,6 +41,10 @@ func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
 	log.Printf("Starting version %s BuildTime: %s", global.Version, global.BuildTime)
+
+	//log.Printf("Waiting for system to fully start (1 min)")
+	//
+	//<-time.After(1 * time.Minute)
 
 	mqtt := mqtthelper.CreateMqttHelper(mqtt_prefix)
 	defer mqtt.Close()
@@ -72,8 +76,8 @@ loop:
 	for {
 		// victron.ListNames()
 		// current.PublishAll()
-		ev.Write_MainsMeter()
-		ev.Write_HomeBattery()
+		ev.WriteMainsmeter()
+		ev.WriteHomebattery()
 
 		select {
 		case <-time.After(2 * time.Second):

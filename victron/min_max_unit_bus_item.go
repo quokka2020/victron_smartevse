@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"reflect"
-	"strconv"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -17,6 +16,7 @@ type MinMaxUnitBusItem struct {
 	min       float64
 	max       float64
 	presision int
+	callback  func(value, min, max float64)
 }
 
 func NewMinMaxUnitBusItem(value, min, max float64, unit string, presision int) MinMaxUnitBusItem {
@@ -30,41 +30,44 @@ func NewMinMaxUnitBusItem(value, min, max float64, unit string, presision int) M
 }
 
 func (f *MinMaxUnitBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
-	log.Printf("%s Received %s - %v - %s", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value(), val.String())
-	value, err := strconv.ParseFloat(val.String(), 64)
+	log.Printf("%s Received %s - %v", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value())
+	value, err := variant_float_value(val)
 	if err != nil {
-		return -1, dbus.NewError(
-			"com.victronenergy.BusItem.Error",
-			[]any{fmt.Sprintf("Not a number %v", err)},
-		)
+		return -1, err
 	}
 
 	if value < f.min {
+		log.Printf("%s Value %.*f to low range %.*f..%.*f", f.getObjectPath(), f.presision, value, f.presision, f.min, f.presision, f.max)
 		return -1, dbus.NewError(
 			"com.victronenergy.BusItem.Error",
 			[]any{fmt.Sprintf("value %.*f to low range %.*f..%.*f", f.presision, value, f.presision, f.min, f.presision, f.max)},
 		)
 	}
 	if value > f.max {
+		log.Printf("%s Value %.*f to high range %.*f..%.*f", f.getObjectPath(), f.presision, value, f.presision, f.min, f.presision, f.max)
 		return -1, dbus.NewError(
 			"com.victronenergy.BusItem.Error",
 			[]any{fmt.Sprintf("value %.*f to high range %.*f..%.*f", f.presision, value, f.presision, f.min, f.presision, f.max)},
 		)
 	}
 	f.value = value
+	if f.callback != nil {
+		log.Printf("Calling callback with value %.*f, min %.*f, max %.*f", f.presision, value, f.presision, f.min, f.presision, f.max)
+		f.callback(value, f.min, f.max)
+	}
 	return 0, nil
 }
 
-func (f *MinMaxUnitBusItem) GetValue() (any, *dbus.Error) {
-	return f.value, nil
+func (f *MinMaxUnitBusItem) GetValue() (dbus.Variant, *dbus.Error) {
+	return dbus.MakeVariant(f.value), nil
 }
 
-func (f *MinMaxUnitBusItem) GetMin() (any, *dbus.Error) {
-	return f.min, nil
+func (f *MinMaxUnitBusItem) GetMin() (dbus.Variant, *dbus.Error) {
+	return dbus.MakeVariant(f.min), nil
 }
 
-func (f *MinMaxUnitBusItem) GetMax() (any, *dbus.Error) {
-	return f.max, nil
+func (f *MinMaxUnitBusItem) GetMax() (dbus.Variant, *dbus.Error) {
+	return dbus.MakeVariant(f.max), nil
 }
 
 func (f *MinMaxUnitBusItem) GetText() (string, *dbus.Error) {
@@ -73,4 +76,10 @@ func (f *MinMaxUnitBusItem) GetText() (string, *dbus.Error) {
 
 func (f *MinMaxUnitBusItem) change(value float64) {
 	f.value = value
+}
+
+func (f *MinMaxUnitBusItem) setBounds(min, value, max float64) {
+	f.min = min
+	f.value = value
+	f.max = max
 }

@@ -44,9 +44,11 @@ type SmartEVSE struct {
 	mode        string
 	evplugstate string
 	state       string
+	autoIdtag   string
+	access      string
 
-	session_time      int64
-	last_session_time int64
+	session_time      float64
+	last_session_time float64
 }
 
 var cfg_smartevse_ips = util.GetEnv("SMARTEVSE_IPS", "")
@@ -62,24 +64,37 @@ func NewEvHandler(mqtt *mqtthelper.Mqtt_Helper) (*EvHandler, error) {
 		return nil, err
 	}
 
-	if len(handler.evs) > 1 {
-		return nil, fmt.Errorf("Only capable to handle 1 smartevse, got %d", len(handler.evs))
-	}
-
 	for _, ev := range handler.evs {
-		err = ev.load_info()
+		err = ev.loadInfo()
 		if err != nil {
 			return nil, err
 		}
 		log.Printf("loaded: %s %d - %s", ev.Name, ev.SerialNr, ev.Prefix)
 	}
 
+	handler.evs = dedupeBySerial(handler.evs)
+
 	for _, ev := range handler.evs {
-		log.Printf("loaded: %s %d - %s", ev.Name, ev.SerialNr, ev.Prefix)
 		ev.subscribe(mqtt)
 	}
 
 	return &handler, nil
+}
+
+func dedupeBySerial(evs []*SmartEVSE) []*SmartEVSE {
+	seen := map[int]string{}
+	result := make([]*SmartEVSE, 0, len(evs))
+
+	for _, ev := range evs {
+		if prevIP, exists := seen[ev.SerialNr]; exists {
+			log.Printf("Duplicate SmartEVSE serial %d detected (%s and %s); keeping the first entry", ev.SerialNr, prevIP, ev.IP)
+			continue
+		}
+		seen[ev.SerialNr] = ev.IP
+		result = append(result, ev)
+	}
+
+	return result
 }
 
 func (handler *EvHandler) Close() error {
@@ -130,7 +145,7 @@ func (handler *EvHandler) findSmartEVSEs() error {
 	return nil
 }
 
-func (ev *SmartEVSE) load_info() error {
+func (ev *SmartEVSE) loadInfo() error {
 	raw, err := web.settings(ev.IP)
 	if err != nil {
 		return err
@@ -148,6 +163,15 @@ func (ev *SmartEVSE) load_info() error {
 	ev.current_min = raw.Settings.Current_Min
 	ev.current = raw.Settings.Charge_Current / 10
 	ev.current_max = raw.Settings.Current_Max
+	if raw.Ocpp != nil && raw.Ocpp.AutoAuthIdtag != "" {
+		ev.autoIdtag = raw.Ocpp.AutoAuthIdtag
+		log.Printf("RFID tag configured: %s", ev.autoIdtag)
+	}
+
+	if raw.EvMeter != nil {
+		ev.total = raw.EvMeter.Total_Wh / 1000
+		ev.charged = raw.EvMeter.Charged_Wh / 1000
+	}
 
 	ev.session_time = 0
 	ev.last_session_time = 0
@@ -156,17 +180,17 @@ func (ev *SmartEVSE) load_info() error {
 
 func (ev *SmartEVSE) subscribe(mqtt *mqtthelper.Mqtt_Helper) {
 	topic := fmt.Sprintf("%s/#", ev.Prefix)
-	mqtt.AddStringSubscriptionFull(topic, ev.mqtt_received)
+	mqtt.AddStringSubscriptionFull(topic, ev.mqttReceived)
 }
 
-func (ev *SmartEVSE) find_sub(topic string) string {
+func (ev *SmartEVSE) findSub(topic string) string {
 	if len(topic) < len(ev.Prefix)+2 {
 		return topic
 	}
 	return topic[len(ev.Prefix)+1:]
 }
 
-var float_subtopics = []string{
+var floatSubtopics = []string{
 	"EVCurrentL1",
 	"EVCurrentL2",
 	"EVCurrentL3",
@@ -177,77 +201,75 @@ var float_subtopics = []string{
 	"EVTotalEnergyCharged",
 	"ESPTemp",
 }
-var test bool = false
 
-func (ev *SmartEVSE) mqtt_received(topic string, value string) {
-	if test {
-		return
-	}
+func (ev *SmartEVSE) mqttReceived(topic string, value string) {
 	if ev.victron_ev == nil {
 		log.Printf("No victron_ev yet, dropping topic:%s payload:%s", topic, value)
 		return
 	}
-	sub := ev.find_sub(topic)
+	sub := ev.findSub(topic)
 	if sub == topic {
 		log.Printf("invalid topic %s", topic)
 		return
 	}
-	update_state := false
+	updateState := false
+
 	// string values
 	switch sub {
 	case "connected":
-		ev.victron_ev.ChangeConnected(value == "online")
+		ev.victron_ev.SetConnected(value == "online")
 		return
 	case "Access":
+		ev.access = value
 	case "State":
 		ev.state = value
-		update_state = true
+		updateState = true
 	case "EVPlugState":
 		ev.evplugstate = value
-		update_state = true
+		updateState = true
 	case "Error":
 	case "Mode":
 		ev.mode = value
-		update_state = true
+		updateState = true
 	}
-	if update_state {
+	if updateState {
 		if ev.evplugstate == "Disconnected" {
-			ev.victron_ev.ChangeStatus(victron.EV_Status_Disconnected)
+			ev.victron_ev.SetStatus(victron.EV_Status_Disconnected)
 			ev.session_time = 0
 			ev.last_session_time = 0
-			ev.victron_ev.EnergyTime(ev.session_time)
+			ev.victron_ev.SetSessionTime(ev.session_time)
 		} else {
 			switch ev.state {
 			case "Charging":
-				ev.victron_ev.ChangeStatus(victron.EV_Status_Charging)
+				ev.victron_ev.SetStatus(victron.EV_Status_Charging)
 			case "Charging Stopped":
-				ev.victron_ev.ChangeStatus(victron.EV_Status_Connected)
+				ev.victron_ev.SetStatus(victron.EV_Status_Connected)
 			case "Connected to EV":
-				ev.victron_ev.ChangeStatus(victron.EV_Status_Connected)
+				ev.victron_ev.SetStatus(victron.EV_Status_Connected)
 			case "Ready to Charge":
-				ev.victron_ev.ChangeStatus(victron.EV_Status_Waiting_for_start)
+				ev.victron_ev.SetStatus(victron.EV_Status_Waiting_for_start)
 			case "Solar":
-				ev.victron_ev.ChangeStatus(victron.EV_Status_Waiting_for_sun)
+				ev.victron_ev.SetStatus(victron.EV_Status_Waiting_for_sun)
 			case "Smart":
-				ev.victron_ev.ChangeStatus(victron.EV_Status_Charging)
+				ev.victron_ev.SetStatus(victron.EV_Status_Charging)
 			case "Stop Charging":
-				ev.victron_ev.ChangeStatus(victron.EV_Status_Connected)
+				ev.victron_ev.SetStatus(victron.EV_Status_Connected)
 			default:
 				log.Printf("Unmapped status. state:[%s] evplugstate:[%s] mode:[%s]", ev.state, ev.evplugstate, ev.mode)
-				ev.victron_ev.ChangeStatus(victron.EV_Status_Connected)
+				ev.victron_ev.SetStatus(victron.EV_Status_Connected)
 			}
 			if ev.mode == "Off" {
-				ev.victron_ev.ChangeMode(victron.EV_Mode_Manual)
-			} else if ev.state == "Smart" {
-				ev.victron_ev.ChangeMode(victron.EV_Mode_Automatic)
+				ev.victron_ev.SetMode(victron.EV_Mode_Manual)
+			} else if ev.mode == "Smart" {
+				ev.victron_ev.SetMode(victron.EV_Mode_Auto)
 			} else {
-				ev.victron_ev.ChangeMode(victron.EV_Mode_Scheduled)
+				ev.victron_ev.SetMode(victron.EV_Mode_Scheduled)
 			}
 		}
 		return
 	}
 
-	if !slices.Contains(float_subtopics, sub) {
+	if !slices.Contains(floatSubtopics, sub) {
 		return
 	}
 	// float values
@@ -260,33 +282,43 @@ func (ev *SmartEVSE) mqtt_received(topic string, value string) {
 	case "EVCurrentL1":
 		ev.victron_ev.ChangeCurrentL1(i / 10)
 		if i/10 > 0 {
-			now:=time.Now().Unix()
-			if ev.last_session_time > 0 {
-				ev.session_time += (now - ev.last_session_time)
-				ev.victron_ev.EnergyTime(ev.session_time)
-			}
-			ev.last_session_time = now
+			ev.setSessionTime()
 		}
 	case "EVCurrentL2":
 		ev.victron_ev.ChangeCurrentL2(i / 10)
+		if i/10 > 0 {
+			ev.setSessionTime()
+		}
 	case "EVCurrentL3":
 		ev.victron_ev.ChangeCurrentL3(i / 10)
+		if i/10 > 0 {
+			ev.setSessionTime()
+		}
 	case "MaxCurrent":
-		ev.victron_ev.ChangeMaxCurrent(i / 10)
+		ev.victron_ev.SetMaxCurrent(i / 10)
 	case "ChargeCurrent":
-		ev.victron_ev.ChangeChargeCurrent(i / 10)
+		ev.victron_ev.SetChargeCurrent(i / 10)
 	case "EVChargePower":
-		ev.victron_ev.ChangeChargePower(i)
+		ev.victron_ev.SetAcPower(i)
 	case "EVEnergyCharged":
-		ev.victron_ev.EnergyCharged(i / 1000)
+		ev.victron_ev.SetSessionEnergy(i / 1000)
 	case "EVTotalEnergyCharged":
-		ev.victron_ev.TotalCharged(i / 1000)
+		ev.victron_ev.SetTotalEnergy(i / 1000)
 	case "ESPTemp":
-		ev.victron_ev.Temperature(i)
+		ev.victron_ev.SetTemperature(i)
 	}
 }
 
-func (evse *SmartEVSE) mode_changed_callback(mode victron.EV_Mode) {
+func (ev *SmartEVSE) setSessionTime() {
+	now := time.Now().Unix()
+	if ev.last_session_time > 0 {
+		ev.session_time += float64(now) - ev.last_session_time
+		ev.victron_ev.SetSessionTime(ev.session_time)
+	}
+	ev.last_session_time = float64(now)
+}
+
+func (evse *SmartEVSE) modeChangedCallback(mode victron.EV_Mode) {
 	log.Printf("Request to change mode to: %d", mode)
 	topic := fmt.Sprintf("%s/Set/Mode", evse.Prefix)
 	switch mode {
@@ -294,15 +326,58 @@ func (evse *SmartEVSE) mode_changed_callback(mode victron.EV_Mode) {
 		evse.mqtt.PublishFullTopic(topic, "Off")
 	case victron.EV_Mode_Scheduled:
 		evse.mqtt.PublishFullTopic(topic, "Solar")
-	case victron.EV_Mode_Automatic:
+	case victron.EV_Mode_Auto:
 		evse.mqtt.PublishFullTopic(topic, "Smart")
 	default:
 		log.Printf("Don't know what to do for mode:%d", mode)
 	}
 }
 
-func (ev *EvHandler) Write_MainsMeter() {
+func (evse *SmartEVSE) setOverrideCurrentChangedCallback(value, _, max float64) {
+	if value == max {
+		value = 0 // 0 means no override, so if the value is the same as max, we can set it to 0 to disable the override
+	}
+	log.Printf("Request to change override current to: %f", value)
+	topic := fmt.Sprintf("%s/Set/CurrentOverride", evse.Prefix)
+	payload := fmt.Sprintf("%d", int32(math.RoundToEven(value*10)))
+	evse.mqtt.PublishFullTopic(topic, payload)
+}
+
+func (evse *SmartEVSE) startStopChangedCallback(mode victron.EV_StartStop) {
+	log.Printf("Request to change start/stop to: %d", mode)
+	if evse.autoIdtag == "" {
+		log.Printf("No RFID configured, can't start/stop")
+		return
+	}
+	if (evse.access == "Deny" && mode == victron.EV_StartStop_Start) ||
+		(evse.access == "Allow" && mode == victron.EV_StartStop_Stop) {
+		topic := fmt.Sprintf("%s/Set/RFID", evse.Prefix)
+		payload := evse.autoIdtag
+		evse.mqtt.PublishFullTopic(topic, payload)
+	}
+}
+
+func (evse *SmartEVSE) autoStartChangedCallback(mode victron.EV_AutoStart) {
+	log.Printf("Request to change autostart to: %d", mode)
+	if evse.autoIdtag == "" {
+		log.Printf("No RFID configured, can't auto start/stop")
+	}
+	settings, _ := web.settings(evse.IP)
+	if settings.Ocpp != nil {
+		if settings.Ocpp.AutoAuth != mode.ToString() {
+			err := web.setOcppAutoStart(evse.IP, int32(mode))
+			if err != nil {
+				log.Printf("Failed to update auto start/stop")
+			} else {
+				log.Printf("Updated auto start/stop")
+			}
+		}
+	}
+}
+
+func (ev *EvHandler) WriteMainsmeter() {
 	l1, l2, l3 := ev.victron.Grid()
+	//log.Printf("Grid L1:%f L2:%f L3:%f", l1, l2, l3)
 
 	payload := fmt.Sprintf("%d:%d:%d", int32(math.RoundToEven(l1*10)), int32(math.RoundToEven(l2*10)), int32(math.RoundToEven(l3*10)))
 	for _, smartevse := range ev.evs {
@@ -311,8 +386,10 @@ func (ev *EvHandler) Write_MainsMeter() {
 	}
 }
 
-func (ev *EvHandler) Write_HomeBattery() {
+func (ev *EvHandler) WriteHomebattery() {
 	battery := ev.victron.BatteryCurrent()
+	//log.Printf("Battery current:%f", battery)
+
 	payload := fmt.Sprintf("%d", int32(math.RoundToEven(battery*10)))
 	for _, smartevse := range ev.evs {
 		topic := fmt.Sprintf("%s/Set/HomeBatteryCurrent", smartevse.Prefix)

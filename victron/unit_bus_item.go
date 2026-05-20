@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"reflect"
-	"strconv"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -14,6 +13,7 @@ type UnitBusItem struct {
 	unit      string
 	value     float64
 	presision int
+	callback  func(value float64)
 }
 
 func NewUnitFormatterObject(value float64, unit string, presision int) UnitBusItem {
@@ -25,21 +25,21 @@ func NewUnitFormatterObject(value float64, unit string, presision int) UnitBusIt
 }
 
 func (f *UnitBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
-	log.Printf("%s Received %s - %v - %s", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value(), val.String())
-	value, err := strconv.ParseFloat(val.String(), 64)
+	log.Printf("%s Received %s - %v", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value())
+	value, err := variant_float_value(val)
 	if err != nil {
-		return -1, dbus.NewError(
-			"com.victronenergy.BusItem.Error",
-			[]any{fmt.Sprintf("Not a number %v", err)},
-		)
+		return -1, err
 	}
 
 	f.value = value
+	if f.callback != nil {
+		f.callback(value)
+	}
 	return 0, nil
 }
 
-func (f *UnitBusItem) GetValue() (any, *dbus.Error) {
-	return f.value, nil
+func (f *UnitBusItem) GetValue() (dbus.Variant, *dbus.Error) {
+	return dbus.MakeVariant(f.value), nil
 }
 
 func (f *UnitBusItem) GetText() (string, *dbus.Error) {
