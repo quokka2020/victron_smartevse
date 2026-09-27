@@ -77,16 +77,20 @@ com.victronenergy.evcharger
 type Victron_EV_Charger struct {
 	parent           *VictronHandler
 	service          *Service
+	s2               *s2RMStub
 	running          bool
 	constant_paths   map[string]BusItem
 	modifyable_items map[string]BusItem
 
 	connected ManualBusItem // /Connected  int32: 0=offline 1=online
 
-	power    UnitBusItem // /Ac/Power
-	power_l1 UnitBusItem // /Ac/L1/Power
-	power_l2 UnitBusItem // /Ac/L2/Power
-	power_l3 UnitBusItem // /Ac/L3/Power
+	power      UnitBusItem // /Ac/Power
+	power_l1   UnitBusItem // /Ac/L1/Power
+	power_l2   UnitBusItem // /Ac/L2/Power
+	power_l3   UnitBusItem // /Ac/L3/Power
+	voltage_l1 UnitBusItem // /Ac/Out/L1/V
+	voltage_l2 UnitBusItem // /Ac/Out/L2/V
+	voltage_l3 UnitBusItem // /Ac/Out/L3/V
 
 	current     UnitBusItem       // /Current
 	set_current MinMaxUnitBusItem // /SetCurrent (writable, bounded)
@@ -99,7 +103,10 @@ type Victron_EV_Charger struct {
 	charging_time  UnitBusItem // /ChargingTime (deprecated alias, kept in sync with session_time)
 	session_cost   UnitBusItem // /Session/Cost
 
-	temperature UnitBusItem // /MCU/Temperature
+	temperature        UnitBusItem // /MCU/Temperature
+	s2Active           BoolBusItem // /S2/0/Active
+	s2MaxChargePower   UnitBusItem // /S2/0/RmSettings/MaxChargePower
+	s2RememberEvPhases BoolBusItem // /S2/0/RmSettings/RememberEvPhases
 
 	status    EvStatusBusItem
 	mode      EvModeBusItem
@@ -117,10 +124,13 @@ func newEvChargerFields(parent *VictronHandler, min, current, max, session_energ
 
 		connected: *NewManualBusItem(int32(0), "Disconnected"),
 
-		power:    NewUnitFormatterObject(0, "W", 1),
-		power_l1: NewUnitFormatterObject(0, "W", 1),
-		power_l2: NewUnitFormatterObject(0, "W", 1),
-		power_l3: NewUnitFormatterObject(0, "W", 1),
+		power:      NewUnitFormatterObject(0, "W", 1),
+		power_l1:   NewUnitFormatterObject(0, "W", 1),
+		power_l2:   NewUnitFormatterObject(0, "W", 1),
+		power_l3:   NewUnitFormatterObject(0, "W", 1),
+		voltage_l1: NewUnitFormatterObject(230, "V", 0),
+		voltage_l2: NewUnitFormatterObject(230, "V", 0),
+		voltage_l3: NewUnitFormatterObject(230, "V", 0),
 
 		current:        NewUnitFormatterObject(current, "A", 1),
 		set_current:    NewMinMaxUnitBusItem(current, min, max, "A", 0),
@@ -132,7 +142,10 @@ func newEvChargerFields(parent *VictronHandler, min, current, max, session_energ
 		charging_time:  NewUnitFormatterObject(0, "s", 0),
 		session_cost:   NewUnitFormatterObject(0, "", 2),
 
-		temperature: NewUnitFormatterObject(20, "C", 0),
+		temperature:        NewUnitFormatterObject(20, "C", 0),
+		s2Active:           NewBoolBusItem(false),
+		s2MaxChargePower:   NewUnitFormatterObject(max*230*3, "W", 0),
+		s2RememberEvPhases: NewBoolBusItem(false),
 
 		status:    NewEvStatusBusItem(EV_Status_Disconnected),
 		mode:      NewEvModeBusItem(EV_Mode_Manual),
@@ -144,26 +157,32 @@ func newEvChargerFields(parent *VictronHandler, min, current, max, session_energ
 
 func (ev *Victron_EV_Charger) initModifyableItems() {
 	ev.modifyable_items = map[string]BusItem{
-		"/Connected":         &ev.connected,
-		"/Status":            &ev.status,
-		"/Ac/Power":          &ev.power,
-		"/Ac/L1/Power":       &ev.power_l1,
-		"/Ac/L2/Power":       &ev.power_l2,
-		"/Ac/L3/Power":       &ev.power_l3,
-		"/Current":           &ev.current,
-		"/SetCurrent":        &ev.set_current,
-		"/MaxCurrent":        &ev.max_current,
-		"/MinCurrent":        &ev.min_current,
-		"/Ac/Energy/Forward": &ev.energy_forward,
-		"/Session/Energy":    &ev.session_energy,
-		"/Session/Time":      &ev.session_time,
-		"/ChargingTime":      &ev.charging_time,
-		"/Session/Cost":      &ev.session_cost,
-		"/MCU/Temperature":   &ev.temperature,
-		"/AutoStart":         &ev.autostart,
-		"/StartStop":         &ev.startStop,
-		"/Mode":              &ev.mode,
-		"/Position":          &ev.position,
+		"/Connected":                        &ev.connected,
+		"/Status":                           &ev.status,
+		"/Ac/Power":                         &ev.power,
+		"/Ac/L1/Power":                      &ev.power_l1,
+		"/Ac/L2/Power":                      &ev.power_l2,
+		"/Ac/L3/Power":                      &ev.power_l3,
+		"/Ac/Out/L1/V":                      &ev.voltage_l1,
+		"/Ac/Out/L2/V":                      &ev.voltage_l2,
+		"/Ac/Out/L3/V":                      &ev.voltage_l3,
+		"/Current":                          &ev.current,
+		"/SetCurrent":                       &ev.set_current,
+		"/MaxCurrent":                       &ev.max_current,
+		"/MinCurrent":                       &ev.min_current,
+		"/Ac/Energy/Forward":                &ev.energy_forward,
+		"/Session/Energy":                   &ev.session_energy,
+		"/Session/Time":                     &ev.session_time,
+		"/ChargingTime":                     &ev.charging_time,
+		"/Session/Cost":                     &ev.session_cost,
+		"/MCU/Temperature":                  &ev.temperature,
+		"/S2/0/Active":                      &ev.s2Active,
+		"/S2/0/RmSettings/MaxChargePower":   &ev.s2MaxChargePower,
+		"/S2/0/RmSettings/RememberEvPhases": &ev.s2RememberEvPhases,
+		"/AutoStart":                        &ev.autostart,
+		"/StartStop":                        &ev.startStop,
+		"/Mode":                             &ev.mode,
+		"/Position":                         &ev.position,
 	}
 }
 
@@ -229,6 +248,20 @@ func (handler *VictronHandler) CreateEvCharger(serial int, version, connection s
 		}
 	}
 
+	ev.s2 = newS2RMStub(handler.dbusconn, deviceName)
+	ev.s2.defaultControlType = ""
+	ev.s2.ombcBootstrapDelay = 2 * time.Second
+	ev.s2.ombcReadyReader = ev.IsOmbcReady
+	ev.s2.powerReader = ev.GetAcPower
+	ev.s2.powerL1Reader = ev.GetAcL1Power
+	ev.s2.powerL2Reader = ev.GetAcL2Power
+	ev.s2.powerL3Reader = ev.GetAcL3Power
+	ev.s2.maxChargePowerReader = ev.GetS2MaxChargePower
+	ev.s2.sessionActiveChanged = ev.setS2Active
+	if err := ev.s2.Export(); err != nil {
+		return ev.return_and_close(fmt.Errorf("failed to export s2 stub: %w", err))
+	}
+
 	err = ev.service.Register()
 	if err != nil {
 		return ev.return_and_close(fmt.Errorf("failed to register service: %w", err))
@@ -289,11 +322,18 @@ func (ev *Victron_EV_Charger) handlePositionChanged(position EV_Position) {
 }
 
 func (ev *Victron_EV_Charger) return_and_close(err error) (*Victron_EV_Charger, error) {
-	ev.running = false
+	ev.Close()
 	if ev.service != nil {
-		ev.service.Close()
+		_ = ev.service.Close()
 	}
 	return nil, err
+}
+
+func (ev *Victron_EV_Charger) Close() {
+	ev.running = false
+	if ev.s2 != nil {
+		ev.s2.Close()
+	}
 }
 
 // notify emits an immediate PropertiesChanged signal for the given item so
@@ -327,6 +367,7 @@ func (ev *Victron_EV_Charger) SetPositionChangedCallback(callback func(EV_Positi
 }
 
 func (ev *Victron_EV_Charger) PublishUpdates() {
+	ev.syncConsumptionVoltages()
 	ev.service.emitItemsChanged(ev.modifyable_items)
 }
 
@@ -353,6 +394,38 @@ func (ev *Victron_EV_Charger) SetAcPower(power float64) {
 	ev.notify(&ev.power)
 }
 
+func (ev *Victron_EV_Charger) GetAcPower() float64 {
+	return ev.power.value
+}
+
+func (ev *Victron_EV_Charger) GetAcL1Power() float64 {
+	return ev.power_l1.value
+}
+
+func (ev *Victron_EV_Charger) GetAcL2Power() float64 {
+	return ev.power_l2.value
+}
+
+func (ev *Victron_EV_Charger) GetAcL3Power() float64 {
+	return ev.power_l3.value
+}
+
+func (ev *Victron_EV_Charger) IsOmbcReady() bool {
+	if ev.parent == nil {
+		return true
+	}
+	return ev.parent.consumption_l1_v.lastValue > 0
+}
+
+func (ev *Victron_EV_Charger) GetS2MaxChargePower() float64 {
+	return ev.s2MaxChargePower.value
+}
+
+func (ev *Victron_EV_Charger) setS2Active(active bool) {
+	ev.s2Active.change(active)
+	ev.notify(&ev.s2Active)
+}
+
 // ChangeChargePower is a deprecated alias for SetAcPower.
 func (ev *Victron_EV_Charger) ChangeChargePower(power float64) {
 	ev.SetAcPower(power)
@@ -371,6 +444,27 @@ func (ev *Victron_EV_Charger) SetAcL2Power(power float64) {
 func (ev *Victron_EV_Charger) SetAcL3Power(power float64) {
 	ev.power_l3.change(power)
 	ev.notify(&ev.power_l3)
+}
+
+func (ev *Victron_EV_Charger) syncConsumptionVoltages() {
+	if ev.parent == nil {
+		return
+	}
+	l1 := ev.parent.consumption_l1_v.lastValue
+	l2 := ev.parent.consumption_l2_v.lastValue
+	l3 := ev.parent.consumption_l3_v.lastValue
+	if l1 <= 0 {
+		l1 = 230
+	}
+	if l2 <= 0 {
+		l2 = 230
+	}
+	if l3 <= 0 {
+		l3 = 230
+	}
+	ev.voltage_l1.change(l1)
+	ev.voltage_l2.change(l2)
+	ev.voltage_l3.change(l3)
 }
 
 // ChangeCurrentL1 is a deprecated alias; callers should use SetAcL1Power with voltage * current.

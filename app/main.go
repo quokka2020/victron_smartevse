@@ -55,33 +55,35 @@ func main() {
 	}
 	defer ev.Close()
 
-	victron, err := victron.NewVictronHandler()
+	victronHandler, err := victron.NewVictronHandler()
 	if err != nil {
 		log.Fatalf("Failed to init victron err:%v", err)
 	}
-	defer victron.Close()
+	defer victronHandler.Close()
 
-	err = ev.RegisterInVictron(victron)
+	err = ev.RegisterInVictron(victronHandler)
 	if err != nil {
 		log.Fatalf("Failed to init victron err:%v", err)
 	}
 
-	go victron.Listen()
+	go victronHandler.Listen()
 
 	// Give
 	<-time.After(5 * time.Second)
 
 	log.Printf("Starting loop")
+	ev.WriteMainsmeter()
+	ev.WriteHomebattery()
+	publishTicker := time.NewTicker(2 * time.Second)
+	defer publishTicker.Stop()
 loop:
 	for {
-		// victron.ListNames()
-		// current.PublishAll()
-		ev.WriteMainsmeter()
-		ev.WriteHomebattery()
-
 		select {
-		case <-time.After(2 * time.Second):
-			// case <-time.After(10 * time.Second):
+		case <-publishTicker.C:
+			// victron.ListNames()
+			// current.PublishAll()
+			ev.WriteMainsmeter()
+			ev.WriteHomebattery()
 
 		case <-sigquit:
 			log.Printf("Received a sigquit")

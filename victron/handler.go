@@ -51,7 +51,7 @@ func NewVictronHandlerWithConn(conn DBusConn) *VictronHandler {
 
 func (handler *VictronHandler) Close() error {
 	for _, service := range handler.services {
-		service.Close()
+		_ = service.Close()
 	}
 	select {
 	case handler.stop_channel <- struct{}{}:
@@ -87,14 +87,6 @@ func (handler *VictronHandler) Listen() {
 		panic(err)
 	}
 
-	// Grab media player keys.
-	// bus := handler.dbusconn.Object("org.gnome.SettingsDaemon", "/org/gnome/SettingsDaemon/MediaKeys")
-	// call := bus.Call("org.gnome.SettingsDaemon.MediaKeys.GrabMediaPlayerKeys", 0, "test app", uint(0))
-	// err = call.Err
-	// if err != nil {
-	// 	panic(err)
-	// }
-
 	signals := make(chan *dbus.Signal, 10)
 	handler.dbusconn.Signal(signals)
 	defer handler.dbusconn.RemoveSignal(signals)
@@ -102,6 +94,9 @@ func (handler *VictronHandler) Listen() {
 	for {
 		select {
 		case message := <-signals:
+			if message == nil {
+				continue
+			}
 			//log.Printf("Name:%s Path:%s Body:%d", message.Name, message.Path, len(message.Body))
 			//for i, val := range message.Body {
 			//	log.Printf("%d: %v %v", i, reflect.TypeOf(val), val)

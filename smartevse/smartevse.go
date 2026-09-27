@@ -101,6 +101,11 @@ func dedupeBySerial(evs []*SmartEVSE) []*SmartEVSE {
 }
 
 func (handler *EvHandler) Close() error {
+	for _, ev := range handler.evs {
+		if ev != nil && ev.victron_ev != nil {
+			ev.victron_ev.Close()
+		}
+	}
 	return nil
 }
 
