@@ -9,7 +9,7 @@ import (
 )
 
 type UnitBusItem struct {
-	bus_item_impl
+	busItemImpl
 	unit      string
 	value     float64
 	presision int
@@ -26,7 +26,7 @@ func NewUnitFormatterObject(value float64, unit string, presision int) UnitBusIt
 
 func (f *UnitBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 	log.Printf("%s Received %s - %v", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value())
-	value, err := variant_float_value(val)
+	value, err := variantFloatValue(val)
 	if err != nil {
 		return -1, err
 	}

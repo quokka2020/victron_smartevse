@@ -8,13 +8,13 @@ import (
 )
 
 func TestBatteryCurrentWithoutVoltagesIsZero(t *testing.T) {
-	h := NewVictronHandlerWithConn(nil)
-	h.battery_v.lastValue = 52
-	h.battery_i.lastValue = 10
+	h := NewHandlerWithConn(nil)
+	h.dcV.lastValue = 52
+	h.dcI.lastValue = 10
 
 	assert.Equal(t, 0.0, h.BatteryCurrent())
 
-	h.SetConsumptionVoltages(230, 230, 230)
+	h.SetAcOutVoltages(230, 230, 230)
 	assert.InDelta(t, 520.0/230.0, h.BatteryCurrent(), 0.0001)
 }
 

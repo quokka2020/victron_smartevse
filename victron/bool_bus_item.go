@@ -9,7 +9,7 @@ import (
 )
 
 type BoolBusItem struct {
-	bus_item_impl
+	busItemImpl
 	value bool
 }
 

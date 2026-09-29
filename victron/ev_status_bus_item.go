@@ -67,7 +67,7 @@ var ev_status = map[EV_Status]string{
 }
 
 type EvStatusBusItem struct {
-	bus_item_impl
+	busItemImpl
 	status EV_Status
 }
 
@@ -79,7 +79,7 @@ func NewEvStatusBusItem(status EV_Status) EvStatusBusItem {
 
 func (f *EvStatusBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 	log.Printf("%s Received %s - %v", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value())
-	value, err := variant_int_value(val)
+	value, err := variantIntValue(val)
 	if err != nil {
 		return -1, err
 	}

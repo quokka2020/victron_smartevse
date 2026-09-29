@@ -8,7 +8,7 @@ import (
 )
 
 type ManualBusItem struct {
-	bus_item_impl
+	busItemImpl
 	value any
 	text  string
 }

@@ -12,58 +12,47 @@ import (
 	"github.com/quokka2020/gohelpers/util"
 )
 
-type web_interface struct {
+type webInterface struct {
 	sync.Mutex
 	client *http.Client
 }
 
-type Smartevse_raw_mqtt struct {
+type Mqtt struct {
 	Prefix string `json:"topic_prefix"`
 }
 
-type Smartevse_raw_settings struct {
-	Current_Min      float64 `json:"current_min"`
-	Current_Max      float64 `json:"current_max"`
-	Charge_Current   float64 `json:"charge_current"`
-	Override_Current float64 `json:"override_current"`
+type Settings struct {
+	CurrentMin      float64 `json:"current_min"`
+	CurrentMax      float64 `json:"current_max"`
+	ChargeCurrent   float64 `json:"charge_current"`
+	OverrideCurrent float64 `json:"override_current"`
 }
 
-type SmartevseRawEvse struct {
+type Evse struct {
 	Access int    `json:"access"`
 	State  string `json:"state"`
 }
 
-type Smartevse_ev_meter struct {
-	Total_Wh   float64 `json:"total_wh"`
-	Charged_Wh float64 `json:"charged_wh"`
+type EvMeter struct {
+	TotalWh   float64 `json:"total_wh"`
+	ChargedWh float64 `json:"charged_wh"`
 }
 
-type SmartevseOcpp struct {
-	Mode          string `json:"mode"`
-	BackendUrl    string `json:"backend_url"`
-	CbId          string `json:"cb_id"`
-	AuthKey       string `json:"auth_key"`
-	AutoAuth      string `json:"auto_auth"`
-	AutoAuthIdtag string `json:"auto_auth_idtag"`
-	Status        string `json:"status"`
+type Raw struct {
+	SerialNr int       `json:"serialnr"`
+	Version  string    `json:"version"`
+	Mode     string    `json:"mode"`
+	ModeId   int       `json:"mode_id"`
+	MQTT     *Mqtt     `json:"mqtt"`
+	Settings *Settings `json:"settings"`
+	Evse     *Evse     `json:"evse"`
+	EvMeter  *EvMeter  `json:"ev_meter"`
 }
 
-type Smartevse_raw struct {
-	SerialNr int                     `json:"serialnr"`
-	Version  string                  `json:"version"`
-	Mode     string                  `json:"mode"`
-	ModeId   int                     `json:"mode_id"`
-	MQTT     *Smartevse_raw_mqtt     `json:"mqtt"`
-	Settings *Smartevse_raw_settings `json:"settings"`
-	Evse     *SmartevseRawEvse       `json:"evse"`
-	EvMeter  *Smartevse_ev_meter     `json:"ev_meter"`
-	Ocpp     *SmartevseOcpp          `json:"ocpp"`
-}
-
-func (h *web_interface) init() {
-	h.Lock()
-	defer h.Unlock()
-	if h.client != nil {
+func (web *webInterface) init() {
+	web.Lock()
+	defer web.Unlock()
+	if web.client != nil {
 		return
 	}
 	tr := &http.Transport{
@@ -74,16 +63,16 @@ func (h *web_interface) init() {
 		DisableCompression:    true,
 		// TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
-	h.client = &http.Client{
+	web.client = &http.Client{
 		Transport: tr,
 		Timeout:   5 * time.Second,
 	}
 }
 
-func (web *web_interface) get(ev_ip, urlpart string, v any) error {
+func (web *webInterface) get(evHost, urlPath string, v any) error {
 	web.init()
 
-	url := fmt.Sprintf("http://%s/%s", ev_ip, urlpart)
+	url := fmt.Sprintf("http://%s/%s", evHost, urlPath)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
@@ -114,8 +103,8 @@ func (web *web_interface) get(ev_ip, urlpart string, v any) error {
 	return fmt.Errorf("unexpected response from %s status:%d", url, resp.StatusCode)
 }
 
-func (web *web_interface) settings(ev string) (Smartevse_raw, error) {
-	result := Smartevse_raw{}
+func (web *webInterface) settings(ev string) (Raw, error) {
+	result := Raw{}
 	err := web.get(ev, "settings", &result)
 	return result, err
 }

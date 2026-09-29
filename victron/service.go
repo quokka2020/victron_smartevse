@@ -14,7 +14,7 @@ import (
 type Service struct {
 	// lock for values
 	mu             sync.Mutex
-	parent         *VictronHandler
+	parent         *Handler
 	name           string
 	bus_items      map[string]BusItem
 	deviceInstance int
@@ -25,7 +25,7 @@ type Service struct {
 var nonAlphanumberic = regexp.MustCompile("[^a-zA-Z0-9]+")
 
 // TODO: validate name
-func (handler *VictronHandler) NewService(name string) (*Service, error) {
+func (h *Handler) NewService(name string) (*Service, error) {
 	parts := strings.Split(name, ".")
 	if len(parts) < 3 {
 		return nil, fmt.Errorf("name %q must have at least 3 parts", name)
@@ -40,7 +40,7 @@ func (handler *VictronHandler) NewService(name string) (*Service, error) {
 	name = strings.Join(parts[:len(parts)-1], ".") + "." + deviceName
 
 	s := &Service{
-		parent:         handler,
+		parent:         h,
 		name:           name,
 		bus_items:      map[string]BusItem{},
 		deviceName:     deviceName,
@@ -52,7 +52,7 @@ func (handler *VictronHandler) NewService(name string) (*Service, error) {
 }
 
 func (s *Service) Close() error {
-	reply, err := s.parent.dbusconn.ReleaseName(s.name)
+	reply, err := s.parent.dbusConn.ReleaseName(s.name)
 	if err != nil {
 		return fmt.Errorf("failed to release name %s: %w", s.name, err)
 	}
@@ -73,7 +73,7 @@ func (s *Service) GetOrCreateDeviceInstance() (int, error) {
 	}
 
 	getDeviceInstance := func() (int, error) {
-		obj := s.parent.dbusconn.Object("com.victronenergy.settings",
+		obj := s.parent.dbusConn.Object("com.victronenergy.settings",
 			dbus.ObjectPath("/Settings/Devices/"+s.deviceName+"/ClassAndVrmInstance"))
 
 		var value string
@@ -97,7 +97,7 @@ func (s *Service) GetOrCreateDeviceInstance() (int, error) {
 
 	// See https://github.com/victronenergy/localsettings?tab=readme-ov-file#using-addsetting-to-allocate-a-vrm-device-instance
 	var result int
-	err = s.parent.dbusconn.Object("com.victronenergy.settings", "/Settings/Devices").Call(
+	err = s.parent.dbusConn.Object("com.victronenergy.settings", "/Settings/Devices").Call(
 		"AddSetting",
 		0,
 		s.deviceName,          // group
@@ -130,7 +130,7 @@ func (s *Service) deviceSettingPath(name string) dbus.ObjectPath {
 }
 
 func (s *Service) getDeviceSetting(name string, target any) error {
-	obj := s.parent.dbusconn.Object("com.victronenergy.settings", s.deviceSettingPath(name))
+	obj := s.parent.dbusConn.Object("com.victronenergy.settings", s.deviceSettingPath(name))
 	if err := obj.Call("GetValue", 0).Store(target); err != nil {
 		return fmt.Errorf("failed to get setting %s: %w", name, err)
 	}
@@ -139,7 +139,7 @@ func (s *Service) getDeviceSetting(name string, target any) error {
 
 func (s *Service) addDeviceSetting(name string, defaultValue any, itemType string, minimum any, maximum any) error {
 	var result int
-	err := s.parent.dbusconn.Object("com.victronenergy.settings", "/Settings/Devices").Call(
+	err := s.parent.dbusConn.Object("com.victronenergy.settings", "/Settings/Devices").Call(
 		"AddSetting",
 		0,
 		s.deviceName,
@@ -177,7 +177,7 @@ func (s *Service) GetOrCreateDeviceIntSetting(name string, defaultValue int32, m
 
 func (s *Service) SetDeviceIntSetting(name string, value int32) error {
 	var result int
-	err := s.parent.dbusconn.Object("com.victronenergy.settings", s.deviceSettingPath(name)).Call(
+	err := s.parent.dbusConn.Object("com.victronenergy.settings", s.deviceSettingPath(name)).Call(
 		"SetValue",
 		0,
 		dbus.MakeVariant(value),
@@ -196,7 +196,7 @@ func (s *Service) Register() error {
 
 	w := &service_wrapper{service: s}
 
-	if err := s.parent.dbusconn.ExportAll(
+	if err := s.parent.dbusConn.ExportAll(
 		w,
 		root_path,
 		"com.victronenergy.BusItem",
@@ -228,7 +228,7 @@ func (s *Service) Register() error {
 	}
 	dbusXMLinsp := introspect.NewIntrospectable(node)
 
-	if err := s.parent.dbusconn.Export(
+	if err := s.parent.dbusConn.Export(
 		dbusXMLinsp,
 		root_path,
 		"org.freedesktop.DBus.Introspectable"); err != nil {
@@ -264,7 +264,7 @@ func (s *Service) Register() error {
 				}
 				intermediateNode.Interfaces = append(intermediateNode.Interfaces, *iface)
 
-				if err := s.parent.dbusconn.ExportAll(
+				if err := s.parent.dbusConn.ExportAll(
 					pw,
 					dbus.ObjectPath(parentPath),
 					"com.victronenergy.BusItem",
@@ -274,7 +274,7 @@ func (s *Service) Register() error {
 			}
 		}
 
-		if err := s.parent.dbusconn.Export(
+		if err := s.parent.dbusConn.Export(
 			introspect.NewIntrospectable(intermediateNode),
 			dbus.ObjectPath(parentPath),
 			"org.freedesktop.DBus.Introspectable"); err != nil {
@@ -282,7 +282,7 @@ func (s *Service) Register() error {
 		}
 	}
 
-	reply, err := s.parent.dbusconn.RequestName(s.name, dbus.NameFlagDoNotQueue)
+	reply, err := s.parent.dbusConn.RequestName(s.name, dbus.NameFlagDoNotQueue)
 	if err != nil {
 		return fmt.Errorf("failed to request name: %w", err)
 	}
@@ -339,7 +339,7 @@ func (s *Service) AddPath(path string, value BusItem) error {
 
 	// log.Printf("Named :%v",s.parent.dbusconn.Names())
 
-	err = s.parent.dbusconn.ExportAll(
+	err = s.parent.dbusConn.ExportAll(
 		value,
 		value.getObjectPath(),
 		"com.victronenergy.BusItem",
@@ -356,7 +356,7 @@ func (s *Service) AddPath(path string, value BusItem) error {
 	node.Interfaces = append(node.Interfaces, *iface)
 	dbusXMLinsp := introspect.NewIntrospectable(node)
 
-	err = s.parent.dbusconn.Export(
+	err = s.parent.dbusConn.Export(
 		dbusXMLinsp,
 		value.getObjectPath(),
 		"org.freedesktop.DBus.Introspectable")
@@ -378,7 +378,7 @@ func (s *Service) PropertiesChanged(item BusItem) error {
 		"Value": value,
 		"Text":  dbus.MakeVariant(text),
 	}
-	return s.parent.dbusconn.Emit(
+	return s.parent.dbusConn.Emit(
 		item.getObjectPath(),
 		"com.victronenergy.BusItem.PropertiesChanged",
 		payload,
@@ -397,6 +397,6 @@ func (s *Service) emitItemsChanged(modifyable_items map[string]BusItem) {
 	}
 
 	if len(items) > 0 {
-		s.parent.dbusconn.Emit("/", "com.victronenergy.BusItem.ItemsChanged", items)
+		s.parent.dbusConn.Emit("/", "com.victronenergy.BusItem.ItemsChanged", items)
 	}
 }

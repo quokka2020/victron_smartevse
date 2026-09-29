@@ -28,7 +28,7 @@ func (a EV_AutoStart) ToString() string {
 }
 
 type EvAutoStartBusItem struct {
-	bus_item_impl
+	busItemImpl
 	autostart EV_AutoStart
 	callback  func(mode EV_AutoStart)
 }
@@ -41,7 +41,7 @@ func NewEvAutoStartBusItem(autostart EV_AutoStart) EvAutoStartBusItem {
 
 func (f *EvAutoStartBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 	log.Printf("%s Received %s - %v", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value())
-	value, err := variant_int_value(val)
+	value, err := variantIntValue(val)
 	if err != nil {
 		return -1, err
 	}

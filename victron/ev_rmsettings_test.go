@@ -12,9 +12,9 @@ func TestEvChargerExposesS2RmSettingsPaths(t *testing.T) {
 	ev := newEvChargerFields(nil, 6, 10, 16, 0, 0)
 	ev.initModifyableItems()
 
-	maxPowerItem, hasMax := ev.modifyable_items["/S2/0/RmSettings/MaxChargePower"]
-	rememberItem, hasRemember := ev.modifyable_items["/S2/0/RmSettings/RememberEvPhases"]
-	activeItem, hasActive := ev.modifyable_items["/S2/0/Active"]
+	maxPowerItem, hasMax := ev.modifiablePaths["/S2/0/RmSettings/MaxChargePower"]
+	rememberItem, hasRemember := ev.modifiablePaths["/S2/0/RmSettings/RememberEvPhases"]
+	activeItem, hasActive := ev.modifiablePaths["/S2/0/Active"]
 
 	require.True(t, hasMax)
 	require.True(t, hasRemember)

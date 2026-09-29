@@ -12,7 +12,7 @@ import (
 
 func TestCreateEvChargerWithDBusAbstraction(t *testing.T) {
 	fakeConn := testhelper.NewFakeDBusConn()
-	handler := victron.NewVictronHandlerWithConn(fakeConn)
+	handler := victron.NewHandlerWithConn(fakeConn)
 
 	charger, err := handler.CreateEvCharger(1001, "v3.10.0", "192.168.1.10", 6, 16, 32, 6.7, 3255.5)
 	require.NoError(t, err)

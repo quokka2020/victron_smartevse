@@ -102,7 +102,7 @@ func TestS2StubConnectAdvertisesHandshakeAndDetails(t *testing.T) {
 	assert.Equal(t, "Handshake", payload1["message_type"])
 	assertUUID(t, payload1["message_id"])
 	assert.Equal(t, "RM", payload1["role"])
-	assert.Equal(t, []any{"0.0.2-beta", "0.8"}, payload1["supported_protocol_versions"])
+	assert.Equal(t, []any{"0.0.2-beta"}, payload1["supported_protocol_versions"])
 
 	establishSession(t, stub, fakeConn, "cem-client")
 	require.Len(t, fakeConn.emitted, 3)
@@ -165,7 +165,7 @@ func TestS2StubTracksHandshakeAndControlTypeInText(t *testing.T) {
 	text, dbusErr := stub.GetText()
 	require.Nil(t, dbusErr)
 	assert.True(t, strings.Contains(text, "connected=true"))
-	assert.True(t, strings.Contains(text, "protocol=0.8"))
+	assert.True(t, strings.Contains(text, "protocol=0.0.2-beta"))
 	assert.True(t, strings.Contains(text, "control=NOT_CONTROLABLE"))
 	assert.True(t, strings.Contains(text, "last_rx=SelectControlType"))
 }
@@ -545,7 +545,7 @@ const handshakeResponseMessageID = "a47e7b0d-12fc-4f6d-8907-99666f6a37f0"
 
 func establishSession(t *testing.T, stub *s2RMStub, fakeConn *s2FakeConn, clientID string) {
 	t.Helper()
-	err := stub.Message(clientID, `{"message_type":"HandshakeResponse","message_id":"`+handshakeResponseMessageID+`","selected_protocol_version":"0.8"}`)
+	err := stub.Message(clientID, `{"message_type":"HandshakeResponse","message_id":"`+handshakeResponseMessageID+`","selected_protocol_version":"0.0.2-beta"}`)
 	require.Nil(t, err)
 	records := fakeConn.snapshot()
 	require.GreaterOrEqual(t, len(records), 3)

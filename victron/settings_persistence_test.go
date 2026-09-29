@@ -15,7 +15,7 @@ func TestCreateEvChargerRestoresPersistentAutoStartAndPosition(t *testing.T) {
 	fakeConn.Settings["smartevse_1001/AutoStart"] = int32(EV_AutoStart_Disabled)
 	fakeConn.Settings["smartevse_1001/Position"] = int32(EV_Position_AC_Input)
 
-	handler := NewVictronHandlerWithConn(fakeConn)
+	handler := NewHandlerWithConn(fakeConn)
 	charger, err := handler.CreateEvCharger(1001, "v3.10.0", "192.168.1.10", 6, 16, 32, 6.7, 3255.5)
 	require.NoError(t, err)
 	require.NotNil(t, charger)
@@ -26,7 +26,7 @@ func TestCreateEvChargerRestoresPersistentAutoStartAndPosition(t *testing.T) {
 
 func TestEvChargerPersistsAutoStartAndPositionOnDBusWrites(t *testing.T) {
 	fakeConn := testhelper.NewFakeDBusConn()
-	handler := NewVictronHandlerWithConn(fakeConn)
+	handler := NewHandlerWithConn(fakeConn)
 	charger, err := handler.CreateEvCharger(1001, "v3.10.0", "192.168.1.10", 6, 16, 32, 6.7, 3255.5)
 	require.NoError(t, err)
 	require.NotNil(t, charger)
