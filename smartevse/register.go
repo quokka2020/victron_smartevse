@@ -20,6 +20,11 @@ func (ev *EvHandler) RegisterInVictron(vh *victron.VictronHandler) error {
 		evse.victron_ev.SetStartStopChangedCallback(evse.startStopChangedCallback)
 		evse.victron_ev.SetAutoStartChangedCallback(evse.autoStartChangedCallback)
 		evse.syncVictronState()
+
+		// Wait for all topics before subsribing
+		if ev.mqtt != nil {
+			evse.subscribe(ev.mqtt)
+		}
 	}
 
 	return nil

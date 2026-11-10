@@ -247,7 +247,7 @@ This bridge intentionally separates **managed mode** (Victron-facing intent) fro
 - Victron `/Mode=Manual` → SmartEVSE `Smart`
 - Victron `/Mode=Auto` → SmartEVSE `Solar` by default
 - Victron `/Mode=Auto` + active internal managed control → SmartEVSE `Smart`
-- Victron `/Mode=Scheduled` → rejected (SmartEVSE has no equivalent)
+- Victron `/Mode=Scheduled` → SmartEVSE `Solar` (SmartEVSE has no time schedules)
 - Victron `/StartStop=Stop` → SmartEVSE `Pause`
 - Victron `/StartStop=Start` → clears `Pause` and restores the current strategy
 - Victron `/AutoStart=Enabled` → when an EV reconnects, clear `Pause`
@@ -265,7 +265,8 @@ This makes Victron `Auto` usable with Opportunity Loads / DynamicESS: when an in
 - D-Bus sender hardcoded (`com.victronenergy.vebus.ttyS4`)
 - MQTT topic prefix taken from SmartEVSE config
 - `AutoStart` is bridge-local, persisted across restarts
-- `Scheduled` mode is intentionally rejected because SmartEVSE exposes only `Smart`, `Solar`, and `Pause`
+- `Scheduled` mode has no time schedule behind it: SmartEVSE exposes only `Smart`, `Solar`, and `Pause`, so it behaves as `Solar`
+- `/Mode` is not persisted: after a restart it is derived from the SmartEVSE mode again, so `Scheduled` comes back as `Auto`
 
 ---
 

@@ -404,3 +404,31 @@ func TestMQTTToDBusE2E_InvalidNumericPayloadIsIgnored(t *testing.T) {
 	assert.InDelta(t, 32.0, before, 0.0001)
 	assert.Equal(t, before, requirePathValue[float64](t, "/MaxCurrent", fakeConn))
 }
+
+func TestMQTTToDBusE2E_MaxCurrentUpdatesSetCurrentBounds(t *testing.T) {
+	ev, victronEV, fakeConn := newMQTTToDBusTestEV(t)
+
+	ev.mqttReceived("SmartEVSE/MaxCurrent", "100")
+
+	min, current, max := victronEV.CurrentLimits()
+	assert.InDelta(t, 6.0, min, 0.0001)
+	assert.InDelta(t, 10.0, current, 0.0001, "current must be clamped to the new max")
+	assert.InDelta(t, 10.0, max, 0.0001)
+	assert.InDelta(t, 10.0, requirePathValue[float64](t, "/MaxCurrent", fakeConn), 0.0001)
+	assert.InDelta(t, 10.0, requirePathValue[float64](t, "/SetCurrent", fakeConn), 0.0001)
+}
+
+func TestMQTTToDBusE2E_ScheduledModeMapsToSolar(t *testing.T) {
+	ev, _, fakeConn := newMQTTToDBusTestEV(t)
+	messages := capturePublishedMessages(ev)
+
+	require.NoError(t, ev.modeChangedCallback(victron.EV_Mode_Scheduled))
+	require.Len(t, *messages, 1)
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/Mode", payload: "Solar"}, (*messages)[0])
+	assert.Equal(t, int32(victron.EV_Mode_Scheduled), requirePathValue[int32](t, "/Mode", fakeConn))
+
+	// the SmartEVSE confirming Solar must not flip /Mode over to Auto
+	ev.mqttReceived("SmartEVSE/Mode", "Solar")
+	assert.Equal(t, int32(victron.EV_Mode_Scheduled), requirePathValue[int32](t, "/Mode", fakeConn))
+	assert.Equal(t, "Scheduled", requirePathText(t, "/Mode", fakeConn))
+}

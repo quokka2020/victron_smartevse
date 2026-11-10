@@ -50,7 +50,7 @@ func (f *EvAutoStartBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 	if _, found := ev_autostart[new_autostart]; !found {
 		return -1, dbus.NewError(
 			"com.victronenergy.BusItem.Error",
-			[]any{fmt.Sprintf("Not a number %v", err)},
+			[]any{fmt.Sprintf("invalid /AutoStart value: %d (valid: 0=Disabled 1=Enabled)", value)},
 		)
 	}
 

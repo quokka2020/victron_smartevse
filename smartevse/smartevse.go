@@ -2,7 +2,6 @@ package smartevse
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -81,10 +80,6 @@ func NewEvHandler(mqtt *mqtthelper.Mqtt_Helper) (*EvHandler, error) {
 	}
 
 	handler.evs = dedupeBySerial(handler.evs)
-
-	for _, ev := range handler.evs {
-		ev.subscribe(mqtt)
-	}
 
 	return &handler, nil
 }
@@ -322,6 +317,9 @@ func (ev *SmartEVSE) targetStrategyForManagedMode() string {
 			return "Smart"
 		}
 		return "Solar"
+	case victron.EV_Mode_Scheduled:
+		// SmartEVSE has no time schedules; Scheduled behaves as Solar
+		return "Solar"
 	default:
 		return ""
 	}
@@ -388,7 +386,7 @@ func (ev *SmartEVSE) publishFullTopic(topic, payload string) {
 		return
 	}
 	if ev.mqtt != nil {
-		ev.mqtt.PublishFullTopic(topic, payload)
+		ev.mqtt.PublishFull(topic, payload)
 	}
 }
 
@@ -522,7 +520,11 @@ func (ev *SmartEVSE) mqttReceived(topic string, value string) {
 			ev.setSessionTime()
 		}
 	case "MaxCurrent":
-		ev.victron_ev.SetMaxCurrent(i / 10)
+		// keep the /SetCurrent bounds in sync, otherwise writes are validated against the startup max
+		ev.current_max = i / 10
+		_, current, _ := ev.victron_ev.CurrentLimits()
+		current = math.Max(ev.current_min, math.Min(current, ev.current_max))
+		ev.victron_ev.SetCurrentLimits(ev.current_min, current, ev.current_max)
 	case "ChargeCurrent":
 		ev.victron_ev.SetChargeCurrent(i / 10)
 	case "CurrentOverride":
@@ -550,7 +552,7 @@ func (ev *SmartEVSE) setSessionTime() {
 func (evse *SmartEVSE) modeChangedCallback(mode victron.EV_Mode) error {
 	log.Printf("Request to change mode to: %d", mode)
 	switch mode {
-	case victron.EV_Mode_Manual:
+	case victron.EV_Mode_Manual, victron.EV_Mode_Auto, victron.EV_Mode_Scheduled:
 		evse.managedMode = mode
 		evse.managedModeKnown = true
 		if !evse.isPaused() {
@@ -558,16 +560,6 @@ func (evse *SmartEVSE) modeChangedCallback(mode victron.EV_Mode) error {
 		} else {
 			evse.syncVictronState()
 		}
-	case victron.EV_Mode_Auto:
-		evse.managedMode = mode
-		evse.managedModeKnown = true
-		if !evse.isPaused() {
-			evse.requestRunningMode(evse.targetStrategyForManagedMode())
-		} else {
-			evse.syncVictronState()
-		}
-	case victron.EV_Mode_Scheduled:
-		return errors.New("/Mode=Scheduled is not supported by SmartEVSE; use Manual or Auto")
 	default:
 		log.Printf("Don't know what to do for mode:%d", mode)
 	}
@@ -607,7 +599,7 @@ func (ev *EvHandler) WriteMainsmeter() {
 	payload := fmt.Sprintf("%d:%d:%d", int32(math.RoundToEven(l1*10)), int32(math.RoundToEven(l2*10)), int32(math.RoundToEven(l3*10)))
 	for _, smartevse := range ev.evs {
 		topic := fmt.Sprintf("%s/Set/MainsMeter", smartevse.Prefix)
-		ev.mqtt.PublishFullTopic(topic, payload)
+		ev.mqtt.PublishFull(topic, payload)
 	}
 }
 
@@ -618,6 +610,6 @@ func (ev *EvHandler) WriteHomebattery() {
 	payload := fmt.Sprintf("%d", int32(math.RoundToEven(battery*10)))
 	for _, smartevse := range ev.evs {
 		topic := fmt.Sprintf("%s/Set/HomeBatteryCurrent", smartevse.Prefix)
-		ev.mqtt.PublishFullTopic(topic, payload)
+		ev.mqtt.PublishFull(topic, payload)
 	}
 }

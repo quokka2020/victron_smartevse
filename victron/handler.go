@@ -127,12 +127,6 @@ func (handler *VictronHandler) Listen() {
 
 func (h *VictronHandler) Grid() (float64, float64, float64) {
 	return h.grid_l1_i.lastValue, h.grid_l2_i.lastValue, h.grid_l3_i.lastValue
-
-	//if h.grid_connected.lastValue != 0 {
-	//	return h.grid_l1_i.lastValue, h.grid_l2_i.lastValue, h.grid_l3_i.lastValue
-	//}
-	//
-	//return h.Consumption()
 }
 
 func (h *VictronHandler) Consumption() (float64, float64, float64) {
@@ -147,6 +141,10 @@ func (h *VictronHandler) SetConsumptionVoltages(l1, l2, l3 float64) {
 
 func (h *VictronHandler) BatteryCurrent() float64 {
 	avg_v := (h.consumption_l1_v.lastValue + h.consumption_l2_v.lastValue + h.consumption_l3_v.lastValue) / 3
+	if avg_v == 0 {
+		// no voltages received yet
+		return 0
+	}
 	battery_p := h.battery_v.lastValue * h.battery_i.lastValue
 	// log.Printf("avg_v:%f battery_p:%f b_i:%f b_b:%f l1:%f l2:%f l3:%f",avg_v,battery_p, h.battery_v.lastValue, h.battery_i.lastValue,h.grid_l1_v.lastValue,h.grid_l2_v.lastValue,h.grid_l3_v.lastValue)
 	return battery_p / avg_v

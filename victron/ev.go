@@ -239,11 +239,11 @@ func (handler *VictronHandler) CreateEvCharger(serial int, version, connection s
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
-		for ev.running {
-			select {
-			case <-ticker.C:
-				ev.PublishUpdates()
+		for range ticker.C {
+			if !ev.running {
+				return
 			}
+			ev.PublishUpdates()
 		}
 	}()
 
@@ -416,6 +416,11 @@ func (ev *Victron_EV_Charger) SetCurrentLimits(min, current, max float64) {
 	ev.notify(&ev.min_current)
 	ev.notify(&ev.set_current)
 	ev.notify(&ev.max_current)
+}
+
+// CurrentLimits returns the /SetCurrent bounds and value as min, current, max.
+func (ev *Victron_EV_Charger) CurrentLimits() (float64, float64, float64) {
+	return ev.set_current.min, ev.set_current.value, ev.set_current.max
 }
 
 // SetCurrent is a deprecated alias for SetCurrentLimits.

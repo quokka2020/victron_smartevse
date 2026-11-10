@@ -1,2 +1,4 @@
 build/
 victron_smartevse
+build-and-copy.sh
+dbus-test.sh

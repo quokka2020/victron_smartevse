@@ -43,7 +43,7 @@ func (f *EvStartStopBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 	if _, found := ev_startstop[new_start]; !found {
 		return -1, dbus.NewError(
 			"com.victronenergy.BusItem.Error",
-			[]any{fmt.Sprintf("Not a number %v", err)},
+			[]any{fmt.Sprintf("invalid /StartStop value: %d (valid: 0=Stop 1=Start)", value)},
 		)
 	}
 

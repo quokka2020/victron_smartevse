@@ -96,11 +96,11 @@ func (web *web_interface) get(ev_ip, urlpart string, v any) error {
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	if util.Verbose() {
 		log.Printf("sfc-api %s in %s: Just received %d", url, time.Since(requestStart), resp.StatusCode)
 	}
 	if resp.StatusCode == http.StatusOK {
-		defer resp.Body.Close()
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return err
@@ -111,55 +111,11 @@ func (web *web_interface) get(ev_ip, urlpart string, v any) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("not logged in %s status:%d", url, resp.StatusCode)
-}
-
-func (web *web_interface) post(ev_ip, urlpart string, v any) error {
-	web.init()
-
-	url := fmt.Sprintf("http://%s/%s", ev_ip, urlpart)
-	req, err := http.NewRequest("POST", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Accept", "application/json")
-	requestStart := time.Now()
-
-	resp, err := web.client.Do(req)
-	if err != nil {
-		return err
-	}
-	if util.Verbose() {
-		log.Printf("sfc-api %s in %s: Just received %d", url, time.Since(requestStart), resp.StatusCode)
-	}
-	if resp.StatusCode == http.StatusOK {
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return err
-		}
-		err = json.Unmarshal(body, v)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-	return fmt.Errorf("not logged in %s status:%d", url, resp.StatusCode)
+	return fmt.Errorf("unexpected response from %s status:%d", url, resp.StatusCode)
 }
 
 func (web *web_interface) settings(ev string) (Smartevse_raw, error) {
 	result := Smartevse_raw{}
 	err := web.get(ev, "settings", &result)
 	return result, err
-}
-
-func (web *web_interface) setOcppAutoStart(ev string, autostart int32) error {
-	query := fmt.Sprintf(
-		"settings?ocpp_update=1&ocpp_auto_auth=%d",
-		autostart,
-	)
-
-	result := Smartevse_raw{}
-	return web.post(ev, query, &result)
 }
