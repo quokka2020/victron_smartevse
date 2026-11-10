@@ -22,6 +22,7 @@ func TestParseSettings(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Equal(t, 9999, raw.SerialNr)
+	assert.Equal(t, "SOLAR", raw.Mode)
 	assert.Equal(t, 2, raw.ModeId)
 
 	assert.Equal(t, "v3.10.0", raw.Version)
@@ -31,6 +32,10 @@ func TestParseSettings(t *testing.T) {
 	assert.Equal(t, 6.0, raw.Settings.Current_Min)
 	assert.Equal(t, 60.0, raw.Settings.Charge_Current)
 	assert.Equal(t, 13.0, raw.Settings.Current_Max)
+	assert.Equal(t, 0.0, raw.Settings.Override_Current)
+	assert.NotNil(t, raw.Evse)
+	assert.Equal(t, 1, raw.Evse.Access)
+	assert.Equal(t, "Charging Stopped - No Power Available", raw.Evse.State)
 	assert.Equal(t, 3255525.0, raw.EvMeter.Total_Wh)
 	assert.Equal(t, 6721.0, raw.EvMeter.Charged_Wh)
 

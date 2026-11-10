@@ -106,6 +106,9 @@ type Victron_EV_Charger struct {
 	autostart EvAutoStartBusItem
 	startStop EvStartStopBusItem
 	position  EvPositionBusItem // /Position
+
+	autostartChangedCallback func(mode EV_AutoStart)
+	positionChangedCallback  func(EV_Position)
 }
 
 func newEvChargerFields(parent *VictronHandler, min, current, max, session_energy, total float64) Victron_EV_Charger {
@@ -184,6 +187,12 @@ func (handler *VictronHandler) CreateEvCharger(serial int, version, connection s
 		return ev.return_and_close(fmt.Errorf("failed to get device instance: %w", err))
 	}
 
+	if err := ev.restorePersistentSettings(); err != nil {
+		return ev.return_and_close(fmt.Errorf("failed to restore persistent settings: %w", err))
+	}
+	ev.autostart.callback = ev.handleAutoStartChanged
+	ev.position.callback = ev.handlePositionChanged
+
 	ev.constant_paths = map[string]BusItem{
 		"/ProductName":          NewAnyBusItem("SmartEVSE"),
 		"/DeviceName":           NewAnyBusItem(deviceName),
@@ -241,6 +250,44 @@ func (handler *VictronHandler) CreateEvCharger(serial int, version, connection s
 	return &ev, nil
 }
 
+func (ev *Victron_EV_Charger) restorePersistentSettings() error {
+	persistedAutoStart, err := ev.service.GetOrCreateDeviceIntSetting("AutoStart", int32(ev.autostart.autostart), int32(EV_AutoStart_Disabled), int32(EV_AutoStart_Enabled))
+	if err != nil {
+		return err
+	}
+	if _, ok := ev_autostart[EV_AutoStart(persistedAutoStart)]; ok {
+		ev.autostart.change(EV_AutoStart(persistedAutoStart))
+	}
+
+	persistedPosition, err := ev.service.GetOrCreateDeviceIntSetting("Position", int32(ev.position.position), int32(EV_Position_AC_Output), int32(EV_Position_AC_Input))
+	if err != nil {
+		return err
+	}
+	if _, ok := ev_position_text[EV_Position(persistedPosition)]; ok {
+		ev.position.change(EV_Position(persistedPosition))
+	}
+
+	return nil
+}
+
+func (ev *Victron_EV_Charger) handleAutoStartChanged(mode EV_AutoStart) {
+	if err := ev.service.SetDeviceIntSetting("AutoStart", int32(mode)); err != nil {
+		log.Printf("persist /AutoStart: %v", err)
+	}
+	if ev.autostartChangedCallback != nil {
+		ev.autostartChangedCallback(mode)
+	}
+}
+
+func (ev *Victron_EV_Charger) handlePositionChanged(position EV_Position) {
+	if err := ev.service.SetDeviceIntSetting("Position", int32(position)); err != nil {
+		log.Printf("persist /Position: %v", err)
+	}
+	if ev.positionChangedCallback != nil {
+		ev.positionChangedCallback(position)
+	}
+}
+
 func (ev *Victron_EV_Charger) return_and_close(err error) (*Victron_EV_Charger, error) {
 	ev.running = false
 	if ev.service != nil {
@@ -259,7 +306,7 @@ func (ev *Victron_EV_Charger) notify(item BusItem) {
 	}
 }
 
-func (ev *Victron_EV_Charger) SetModeChangedCallback(callback func(mode EV_Mode)) {
+func (ev *Victron_EV_Charger) SetModeChangedCallback(callback func(mode EV_Mode) error) {
 	ev.mode.callback = callback
 }
 
@@ -272,11 +319,11 @@ func (ev *Victron_EV_Charger) SetStartStopChangedCallback(callback func(mode EV_
 }
 
 func (ev *Victron_EV_Charger) SetAutoStartChangedCallback(callback func(mode EV_AutoStart)) {
-	ev.autostart.callback = callback
+	ev.autostartChangedCallback = callback
 }
 
 func (ev *Victron_EV_Charger) SetPositionChangedCallback(callback func(EV_Position)) {
-	ev.position.callback = callback
+	ev.positionChangedCallback = callback
 }
 
 func (ev *Victron_EV_Charger) PublishUpdates() {
@@ -446,4 +493,18 @@ func (ev *Victron_EV_Charger) ChangeMode(mode EV_Mode) {
 func (ev *Victron_EV_Charger) SetStartStop(s EV_StartStop) {
 	ev.startStop.change(s)
 	ev.notify(&ev.startStop)
+}
+
+// SetAutoStart syncs hardware/internal bridge state→DBus /AutoStart without triggering a callback.
+func (ev *Victron_EV_Charger) SetAutoStart(a EV_AutoStart) {
+	ev.autostart.change(a)
+	ev.notify(&ev.autostart)
+}
+
+func (ev *Victron_EV_Charger) AutoStart() EV_AutoStart {
+	return ev.autostart.autostart
+}
+
+func (ev *Victron_EV_Charger) Position() EV_Position {
+	return ev.position.position
 }

@@ -19,7 +19,17 @@ func TestCreateEvChargerWithDBusAbstraction(t *testing.T) {
 	require.NotNil(t, charger)
 
 	assert.Contains(t, fakeConn.RequestNames, "com.victronenergy.evcharger.smartevse_1001")
-	assert.Equal(t, "evcharger:1", fakeConn.Settings["smartevse_1001"])
+	classAndVrmInstance, found := fakeConn.Setting("smartevse_1001", "ClassAndVrmInstance")
+	require.True(t, found)
+	assert.Equal(t, "evcharger:1", classAndVrmInstance)
+	autoStart, found := fakeConn.Setting("smartevse_1001", "AutoStart")
+	require.True(t, found)
+	assert.Equal(t, int32(victron.EV_AutoStart_Enabled), autoStart)
+	position, found := fakeConn.Setting("smartevse_1001", "Position")
+	require.True(t, found)
+	assert.Equal(t, int32(victron.EV_Position_AC_Output), position)
+	assert.Equal(t, victron.EV_AutoStart_Enabled, charger.AutoStart())
+	assert.Equal(t, victron.EV_Position_AC_Output, charger.Position())
 	assert.NotEmpty(t, fakeConn.ExportedAll)
 	assert.NotEmpty(t, fakeConn.Exported)
 

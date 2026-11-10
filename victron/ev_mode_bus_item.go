@@ -30,7 +30,7 @@ var ev_mode = map[EV_Mode]string{
 type EvModeBusItem struct {
 	bus_item_impl
 	mode     EV_Mode
-	callback func(mode EV_Mode)
+	callback func(mode EV_Mode) error
 }
 
 func NewEvModeBusItem(mode EV_Mode) EvModeBusItem {
@@ -54,10 +54,16 @@ func (f *EvModeBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 		)
 	}
 
-	f.mode = new_mode
 	if f.callback != nil {
-		f.callback(new_mode)
+		if err := f.callback(new_mode); err != nil {
+			return -1, dbus.NewError(
+				"com.victronenergy.BusItem.Error",
+				[]any{err.Error()},
+			)
+		}
 	}
+
+	f.mode = new_mode
 	return 0, nil
 }
 

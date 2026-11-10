@@ -2,6 +2,7 @@ package smartevse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,7 +27,8 @@ type EvHandler struct {
 }
 
 type SmartEVSE struct {
-	mqtt *mqtthelper.Mqtt_Helper
+	mqtt    *mqtthelper.Mqtt_Helper
+	publish func(topic, payload string)
 
 	Name       string
 	IP         string
@@ -41,10 +43,16 @@ type SmartEVSE struct {
 	charged     float64
 	total       float64
 
+	activeStrategyMode       string
+	managedMode              victron.EV_Mode
+	autoStart                victron.EV_AutoStart
+	overrideCurrent          float64
+	managedModeKnown         bool
+	managedAutoControlActive bool
+
 	mode        string
 	evplugstate string
 	state       string
-	autoIdtag   string
 	access      string
 
 	session_time      float64
@@ -98,6 +106,24 @@ func dedupeBySerial(evs []*SmartEVSE) []*SmartEVSE {
 }
 
 func (handler *EvHandler) Close() error {
+	return nil
+}
+
+func (handler *EvHandler) findBySerial(serial int) (*SmartEVSE, error) {
+	for _, evse := range handler.evs {
+		if evse.SerialNr == serial {
+			return evse, nil
+		}
+	}
+	return nil, fmt.Errorf("smartevse with serial %d not found", serial)
+}
+
+func (handler *EvHandler) SetManagedAutoControl(serial int, active bool, overrideCurrent float64) error {
+	evse, err := handler.findBySerial(serial)
+	if err != nil {
+		return err
+	}
+	evse.setManagedAutoControl(active, overrideCurrent)
 	return nil
 }
 
@@ -163,9 +189,22 @@ func (ev *SmartEVSE) loadInfo() error {
 	ev.current_min = raw.Settings.Current_Min
 	ev.current = raw.Settings.Charge_Current / 10
 	ev.current_max = raw.Settings.Current_Max
-	if raw.Ocpp != nil && raw.Ocpp.AutoAuthIdtag != "" {
-		ev.autoIdtag = raw.Ocpp.AutoAuthIdtag
-		log.Printf("RFID tag configured: %s", ev.autoIdtag)
+	ev.overrideCurrent = raw.Settings.Override_Current / 10
+	ev.autoStart = victron.EV_AutoStart_Enabled
+	ev.mode = canonicalizeSmartEVSEMode(raw.Mode)
+	if isStrategyMode(ev.mode) {
+		ev.activeStrategyMode = ev.mode
+	}
+	if raw.Evse != nil {
+		ev.state = raw.Evse.State
+		ev.access = rawAccessToString(raw.Evse.Access)
+	}
+	if ev.activeStrategyMode == "" && ev.state != "" {
+		ev.activeStrategyMode = inferStrategyModeFromState(ev.state)
+	}
+	if ev.activeStrategyMode != "" && !isPauseMode(ev.activeStrategyMode) {
+		ev.managedMode = ev.managedModeFromRuntime()
+		ev.managedModeKnown = true
 	}
 
 	if raw.EvMeter != nil {
@@ -196,10 +235,216 @@ var floatSubtopics = []string{
 	"EVCurrentL3",
 	"MaxCurrent",
 	"ChargeCurrent",
+	"CurrentOverride",
 	"EVChargePower",
 	"EVEnergyCharged",
 	"EVTotalEnergyCharged",
 	"ESPTemp",
+}
+
+func canonicalizeSmartEVSEMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "smart":
+		return "Smart"
+	case "solar":
+		return "Solar"
+	case "pause":
+		return "Pause"
+	case "off":
+		return "Off"
+	default:
+		return strings.TrimSpace(mode)
+	}
+}
+
+func rawAccessToString(access int) string {
+	switch access {
+	case 1:
+		return "Allow"
+	case 0:
+		return "Deny"
+	default:
+		return ""
+	}
+}
+
+func isPauseMode(mode string) bool {
+	mode = canonicalizeSmartEVSEMode(mode)
+	return mode == "Pause"
+}
+
+func isStrategyMode(mode string) bool {
+	mode = canonicalizeSmartEVSEMode(mode)
+	return mode == "Smart" || mode == "Solar"
+}
+
+func inferStrategyModeFromState(state string) string {
+	state = strings.ToLower(strings.TrimSpace(state))
+	if strings.Contains(state, "solar") || strings.Contains(state, "no power available") {
+		return "Solar"
+	}
+	if state != "" {
+		return "Smart"
+	}
+	return ""
+}
+
+func managedModeFromStrategy(strategy string) victron.EV_Mode {
+	if canonicalizeSmartEVSEMode(strategy) == "Solar" {
+		return victron.EV_Mode_Auto
+	}
+	return victron.EV_Mode_Manual
+}
+
+func (ev *SmartEVSE) managedModeFromRuntime() victron.EV_Mode {
+	if ev.activeStrategyMode == "Smart" && ev.managedAutoControlActive {
+		return victron.EV_Mode_Auto
+	}
+	return managedModeFromStrategy(ev.activeStrategyMode)
+}
+
+func (ev *SmartEVSE) effectiveManagedMode() victron.EV_Mode {
+	if ev.managedModeKnown {
+		return ev.managedMode
+	}
+	if ev.activeStrategyMode != "" {
+		return managedModeFromStrategy(ev.activeStrategyMode)
+	}
+	return victron.EV_Mode_Manual
+}
+
+func (ev *SmartEVSE) targetStrategyForManagedMode() string {
+	switch ev.effectiveManagedMode() {
+	case victron.EV_Mode_Manual:
+		return "Smart"
+	case victron.EV_Mode_Auto:
+		if ev.managedAutoControlActive {
+			return "Smart"
+		}
+		return "Solar"
+	default:
+		return ""
+	}
+}
+
+func (ev *SmartEVSE) isPaused() bool {
+	return isPauseMode(ev.mode)
+}
+
+func (ev *SmartEVSE) deriveStatus() victron.EV_Status {
+	if ev.evplugstate == "Disconnected" {
+		return victron.EV_Status_Disconnected
+	}
+	if ev.isPaused() {
+		return victron.EV_Status_Waiting_for_start
+	}
+
+	state := strings.ToLower(strings.TrimSpace(ev.state))
+	solarStrategy := ev.targetStrategyForManagedMode() == "Solar"
+
+	switch {
+	case strings.Contains(state, "waiting for rfid"):
+		return victron.EV_Status_Waiting_for_RFID
+	case strings.Contains(state, "charged"):
+		return victron.EV_Status_Charged
+	case strings.Contains(state, "charging") && !strings.Contains(state, "stopped") && !strings.Contains(state, "stop charging"):
+		return victron.EV_Status_Charging
+	case strings.Contains(state, "no power available") && solarStrategy:
+		return victron.EV_Status_Waiting_for_sun
+	case strings.Contains(state, "solar"):
+		return victron.EV_Status_Waiting_for_sun
+	case strings.Contains(state, "ready to charge"):
+		return victron.EV_Status_Waiting_for_start
+	case strings.Contains(state, "connected to ev"):
+		return victron.EV_Status_Connected
+	case strings.Contains(state, "charging stopped") && solarStrategy:
+		return victron.EV_Status_Waiting_for_sun
+	case strings.Contains(state, "charging stopped"):
+		return victron.EV_Status_Connected
+	case strings.Contains(state, "stop charging"):
+		return victron.EV_Status_Connected
+	default:
+		return victron.EV_Status_Connected
+	}
+}
+
+func (ev *SmartEVSE) syncVictronState() {
+	if ev.victron_ev == nil {
+		return
+	}
+	ev.victron_ev.SetMode(ev.effectiveManagedMode())
+	if ev.isPaused() {
+		ev.victron_ev.SetStartStop(victron.EV_StartStop_Stop)
+	} else {
+		ev.victron_ev.SetStartStop(victron.EV_StartStop_Start)
+	}
+	ev.victron_ev.SetAutoStart(ev.autoStart)
+	ev.victron_ev.SetStatus(ev.deriveStatus())
+}
+
+func (ev *SmartEVSE) publishFullTopic(topic, payload string) {
+	if ev.publish != nil {
+		ev.publish(topic, payload)
+		return
+	}
+	if ev.mqtt != nil {
+		ev.mqtt.PublishFullTopic(topic, payload)
+	}
+}
+
+func (ev *SmartEVSE) applyRunningModeLocally(mode string) {
+	mode = canonicalizeSmartEVSEMode(mode)
+	ev.mode = mode
+	if isStrategyMode(mode) {
+		ev.activeStrategyMode = mode
+	}
+}
+
+func (ev *SmartEVSE) requestRunningMode(mode string) {
+	mode = canonicalizeSmartEVSEMode(mode)
+	if mode == "" {
+		return
+	}
+	topic := fmt.Sprintf("%s/Set/Mode", ev.Prefix)
+	ev.publishFullTopic(topic, mode)
+	ev.applyRunningModeLocally(mode)
+	ev.syncVictronState()
+}
+
+func (ev *SmartEVSE) setManagedAutoControl(active bool, overrideCurrent float64) {
+	ev.managedAutoControlActive = active
+	if active {
+		ev.overrideCurrent = overrideCurrent
+	} else {
+		ev.overrideCurrent = 0
+	}
+
+	topic := fmt.Sprintf("%s/Set/CurrentOverride", ev.Prefix)
+	payload := fmt.Sprintf("%d", int32(math.RoundToEven(ev.overrideCurrent*10)))
+	ev.publishFullTopic(topic, payload)
+
+	if ev.effectiveManagedMode() == victron.EV_Mode_Auto && !ev.isPaused() {
+		ev.requestRunningMode(ev.targetStrategyForManagedMode())
+		return
+	}
+	ev.syncVictronState()
+}
+
+func (ev *SmartEVSE) clearManagedAutoControl() {
+	ev.setManagedAutoControl(false, 0)
+}
+
+func (ev *SmartEVSE) clearPauseOnReconnectIfNeeded(previousPlugState string) {
+	if previousPlugState == "Disconnected" && ev.evplugstate == "Connected" && ev.autoStart == victron.EV_AutoStart_Enabled && ev.isPaused() {
+		ev.requestRunningMode(ev.targetStrategyForManagedMode())
+	}
+}
+
+func (ev *SmartEVSE) enforcePauseOnConnectIfAutoStartDisabled(previousPlugState string) {
+	//log.Printf("enforcePauseOnConnectIfAutoStartDisabled: previousPlugState=%s evplugstate=%s autoStart=%d isPaused=%t", previousPlugState, ev.evplugstate, ev.autoStart, ev.isPaused())
+	if previousPlugState != "Connected" && ev.evplugstate == "Connected" && ev.autoStart == victron.EV_AutoStart_Disabled && !ev.isPaused() {
+		ev.requestRunningMode("Pause")
+	}
 }
 
 func (ev *SmartEVSE) mqttReceived(topic string, value string) {
@@ -225,47 +470,29 @@ func (ev *SmartEVSE) mqttReceived(topic string, value string) {
 		ev.state = value
 		updateState = true
 	case "EVPlugState":
+		previousPlugState := ev.evplugstate
 		ev.evplugstate = value
 		updateState = true
+		ev.enforcePauseOnConnectIfAutoStartDisabled(previousPlugState)
+		ev.clearPauseOnReconnectIfNeeded(previousPlugState)
 	case "Error":
 	case "Mode":
-		ev.mode = value
+		ev.applyRunningModeLocally(value)
+		if isStrategyMode(value) {
+			if !(ev.managedModeKnown && ev.targetStrategyForManagedMode() == canonicalizeSmartEVSEMode(value)) {
+				ev.managedMode = ev.managedModeFromRuntime()
+				ev.managedModeKnown = true
+			}
+		}
 		updateState = true
 	}
 	if updateState {
 		if ev.evplugstate == "Disconnected" {
-			ev.victron_ev.SetStatus(victron.EV_Status_Disconnected)
 			ev.session_time = 0
 			ev.last_session_time = 0
 			ev.victron_ev.SetSessionTime(ev.session_time)
-		} else {
-			switch ev.state {
-			case "Charging":
-				ev.victron_ev.SetStatus(victron.EV_Status_Charging)
-			case "Charging Stopped":
-				ev.victron_ev.SetStatus(victron.EV_Status_Connected)
-			case "Connected to EV":
-				ev.victron_ev.SetStatus(victron.EV_Status_Connected)
-			case "Ready to Charge":
-				ev.victron_ev.SetStatus(victron.EV_Status_Waiting_for_start)
-			case "Solar":
-				ev.victron_ev.SetStatus(victron.EV_Status_Waiting_for_sun)
-			case "Smart":
-				ev.victron_ev.SetStatus(victron.EV_Status_Charging)
-			case "Stop Charging":
-				ev.victron_ev.SetStatus(victron.EV_Status_Connected)
-			default:
-				log.Printf("Unmapped status. state:[%s] evplugstate:[%s] mode:[%s]", ev.state, ev.evplugstate, ev.mode)
-				ev.victron_ev.SetStatus(victron.EV_Status_Connected)
-			}
-			if ev.mode == "Off" {
-				ev.victron_ev.SetMode(victron.EV_Mode_Manual)
-			} else if ev.mode == "Smart" {
-				ev.victron_ev.SetMode(victron.EV_Mode_Auto)
-			} else {
-				ev.victron_ev.SetMode(victron.EV_Mode_Scheduled)
-			}
 		}
+		ev.syncVictronState()
 		return
 	}
 
@@ -298,6 +525,8 @@ func (ev *SmartEVSE) mqttReceived(topic string, value string) {
 		ev.victron_ev.SetMaxCurrent(i / 10)
 	case "ChargeCurrent":
 		ev.victron_ev.SetChargeCurrent(i / 10)
+	case "CurrentOverride":
+		ev.overrideCurrent = i / 10
 	case "EVChargePower":
 		ev.victron_ev.SetAcPower(i)
 	case "EVEnergyCharged":
@@ -318,61 +547,57 @@ func (ev *SmartEVSE) setSessionTime() {
 	ev.last_session_time = float64(now)
 }
 
-func (evse *SmartEVSE) modeChangedCallback(mode victron.EV_Mode) {
+func (evse *SmartEVSE) modeChangedCallback(mode victron.EV_Mode) error {
 	log.Printf("Request to change mode to: %d", mode)
-	topic := fmt.Sprintf("%s/Set/Mode", evse.Prefix)
 	switch mode {
 	case victron.EV_Mode_Manual:
-		evse.mqtt.PublishFullTopic(topic, "Off")
-	case victron.EV_Mode_Scheduled:
-		evse.mqtt.PublishFullTopic(topic, "Solar")
+		evse.managedMode = mode
+		evse.managedModeKnown = true
+		if !evse.isPaused() {
+			evse.requestRunningMode(evse.targetStrategyForManagedMode())
+		} else {
+			evse.syncVictronState()
+		}
 	case victron.EV_Mode_Auto:
-		evse.mqtt.PublishFullTopic(topic, "Smart")
+		evse.managedMode = mode
+		evse.managedModeKnown = true
+		if !evse.isPaused() {
+			evse.requestRunningMode(evse.targetStrategyForManagedMode())
+		} else {
+			evse.syncVictronState()
+		}
+	case victron.EV_Mode_Scheduled:
+		return errors.New("/Mode=Scheduled is not supported by SmartEVSE; use Manual or Auto")
 	default:
 		log.Printf("Don't know what to do for mode:%d", mode)
 	}
+	return nil
 }
 
 func (evse *SmartEVSE) setOverrideCurrentChangedCallback(value, _, max float64) {
 	if value == max {
 		value = 0 // 0 means no override, so if the value is the same as max, we can set it to 0 to disable the override
 	}
+	evse.overrideCurrent = value
 	log.Printf("Request to change override current to: %f", value)
 	topic := fmt.Sprintf("%s/Set/CurrentOverride", evse.Prefix)
 	payload := fmt.Sprintf("%d", int32(math.RoundToEven(value*10)))
-	evse.mqtt.PublishFullTopic(topic, payload)
+	evse.publishFullTopic(topic, payload)
 }
 
 func (evse *SmartEVSE) startStopChangedCallback(mode victron.EV_StartStop) {
 	log.Printf("Request to change start/stop to: %d", mode)
-	if evse.autoIdtag == "" {
-		log.Printf("No RFID configured, can't start/stop")
+	if mode == victron.EV_StartStop_Stop {
+		evse.requestRunningMode("Pause")
 		return
 	}
-	if (evse.access == "Deny" && mode == victron.EV_StartStop_Start) ||
-		(evse.access == "Allow" && mode == victron.EV_StartStop_Stop) {
-		topic := fmt.Sprintf("%s/Set/RFID", evse.Prefix)
-		payload := evse.autoIdtag
-		evse.mqtt.PublishFullTopic(topic, payload)
-	}
+	evse.requestRunningMode(evse.targetStrategyForManagedMode())
 }
 
 func (evse *SmartEVSE) autoStartChangedCallback(mode victron.EV_AutoStart) {
 	log.Printf("Request to change autostart to: %d", mode)
-	if evse.autoIdtag == "" {
-		log.Printf("No RFID configured, can't auto start/stop")
-	}
-	settings, _ := web.settings(evse.IP)
-	if settings.Ocpp != nil {
-		if settings.Ocpp.AutoAuth != mode.ToString() {
-			err := web.setOcppAutoStart(evse.IP, int32(mode))
-			if err != nil {
-				log.Printf("Failed to update auto start/stop")
-			} else {
-				log.Printf("Updated auto start/stop")
-			}
-		}
-	}
+	evse.autoStart = mode
+	evse.syncVictronState()
 }
 
 func (ev *EvHandler) WriteMainsmeter() {

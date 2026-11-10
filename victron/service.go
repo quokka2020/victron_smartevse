@@ -125,6 +125,72 @@ func (s *Service) GetOrCreateDeviceInstance() (int, error) {
 	return deviceInstance, nil
 }
 
+func (s *Service) deviceSettingPath(name string) dbus.ObjectPath {
+	return dbus.ObjectPath("/Settings/Devices/" + s.deviceName + "/" + name)
+}
+
+func (s *Service) getDeviceSetting(name string, target any) error {
+	obj := s.parent.dbusconn.Object("com.victronenergy.settings", s.deviceSettingPath(name))
+	if err := obj.Call("GetValue", 0).Store(target); err != nil {
+		return fmt.Errorf("failed to get setting %s: %w", name, err)
+	}
+	return nil
+}
+
+func (s *Service) addDeviceSetting(name string, defaultValue any, itemType string, minimum any, maximum any) error {
+	var result int
+	err := s.parent.dbusconn.Object("com.victronenergy.settings", "/Settings/Devices").Call(
+		"AddSetting",
+		0,
+		s.deviceName,
+		name,
+		dbus.MakeVariant(defaultValue),
+		itemType,
+		dbus.MakeVariant(minimum),
+		dbus.MakeVariant(maximum),
+	).Store(&result)
+	if err != nil {
+		return fmt.Errorf("failed to add setting %s: %w", name, err)
+	}
+	if result != 0 {
+		return fmt.Errorf("unexpected AddSetting result for %s: %d", name, result)
+	}
+	return nil
+}
+
+func (s *Service) GetOrCreateDeviceIntSetting(name string, defaultValue int32, minimum int32, maximum int32) (int32, error) {
+	var value int32
+	if err := s.getDeviceSetting(name, &value); err == nil {
+		return value, nil
+	}
+
+	if err := s.addDeviceSetting(name, defaultValue, "i", minimum, maximum); err != nil {
+		return 0, err
+	}
+
+	if err := s.getDeviceSetting(name, &value); err != nil {
+		return 0, err
+	}
+
+	return value, nil
+}
+
+func (s *Service) SetDeviceIntSetting(name string, value int32) error {
+	var result int
+	err := s.parent.dbusconn.Object("com.victronenergy.settings", s.deviceSettingPath(name)).Call(
+		"SetValue",
+		0,
+		dbus.MakeVariant(value),
+	).Store(&result)
+	if err != nil {
+		return fmt.Errorf("failed to set setting %s: %w", name, err)
+	}
+	if result != 0 {
+		return fmt.Errorf("unexpected SetValue result for %s: %d", name, result)
+	}
+	return nil
+}
+
 func (s *Service) Register() error {
 	root_path := dbus.ObjectPath("/")
 

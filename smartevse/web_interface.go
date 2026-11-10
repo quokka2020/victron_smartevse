@@ -22,9 +22,15 @@ type Smartevse_raw_mqtt struct {
 }
 
 type Smartevse_raw_settings struct {
-	Current_Min    float64 `json:"current_min"`
-	Current_Max    float64 `json:"current_max"`
-	Charge_Current float64 `json:"charge_current"`
+	Current_Min      float64 `json:"current_min"`
+	Current_Max      float64 `json:"current_max"`
+	Charge_Current   float64 `json:"charge_current"`
+	Override_Current float64 `json:"override_current"`
+}
+
+type SmartevseRawEvse struct {
+	Access int    `json:"access"`
+	State  string `json:"state"`
 }
 
 type Smartevse_ev_meter struct {
@@ -45,9 +51,11 @@ type SmartevseOcpp struct {
 type Smartevse_raw struct {
 	SerialNr int                     `json:"serialnr"`
 	Version  string                  `json:"version"`
+	Mode     string                  `json:"mode"`
 	ModeId   int                     `json:"mode_id"`
 	MQTT     *Smartevse_raw_mqtt     `json:"mqtt"`
 	Settings *Smartevse_raw_settings `json:"settings"`
+	Evse     *SmartevseRawEvse       `json:"evse"`
 	EvMeter  *Smartevse_ev_meter     `json:"ev_meter"`
 	Ocpp     *SmartevseOcpp          `json:"ocpp"`
 }

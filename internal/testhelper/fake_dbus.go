@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"victron_smartevse/victron"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -32,6 +31,13 @@ func (o *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Ca
 		}
 	case "AddSetting":
 		result, err := o.conn.handleAddSetting(o.dest, o.path, args)
+		if err != nil {
+			call.Err = dbus.NewError("com.victronenergy.Error", []any{err.Error()})
+		} else {
+			call.Body = []any{result}
+		}
+	case "SetValue":
+		result, err := o.conn.handleSetValue(o.dest, o.path, args)
 		if err != nil {
 			call.Err = dbus.NewError("com.victronenergy.Error", []any{err.Error()})
 		} else {
@@ -71,7 +77,7 @@ type Emit struct {
 type FakeDBusConn struct {
 	mu sync.Mutex
 
-	Settings      map[string]string
+	Settings      map[string]any
 	RequestNames  []string
 	ReleaseNames  []string
 	Exported      []dbus.ObjectPath
@@ -81,7 +87,7 @@ type FakeDBusConn struct {
 }
 
 func NewFakeDBusConn() *FakeDBusConn {
-	return &FakeDBusConn{Settings: map[string]string{}}
+	return &FakeDBusConn{Settings: map[string]any{}}
 }
 
 func (c *FakeDBusConn) Close() error { return nil }
@@ -144,13 +150,13 @@ func (c *FakeDBusConn) Emit(path dbus.ObjectPath, name string, values ...any) er
 	return nil
 }
 
-func (c *FakeDBusConn) handleGetValue(dest string, path dbus.ObjectPath) (string, error) {
+func (c *FakeDBusConn) handleGetValue(dest string, path dbus.ObjectPath) (any, error) {
 	if dest != "com.victronenergy.settings" {
 		return "", fmt.Errorf("unexpected destination %s", dest)
 	}
-	group := extractSettingsGroup(path)
+	key := extractSettingsKey(path)
 	c.mu.Lock()
-	value, found := c.Settings[group]
+	value, found := c.Settings[key]
 	c.mu.Unlock()
 	if !found {
 		return "", fmt.Errorf("setting not found")
@@ -169,27 +175,49 @@ func (c *FakeDBusConn) handleAddSetting(dest string, path dbus.ObjectPath, args 
 	if !ok {
 		return 0, fmt.Errorf("expected group string")
 	}
+	name, ok := args[1].(string)
+	if !ok {
+		return 0, fmt.Errorf("expected name string")
+	}
 	defaultValue, ok := args[2].(dbus.Variant)
 	if !ok {
 		return 0, fmt.Errorf("expected default value variant")
 	}
-	defaultString, ok := defaultValue.Value().(string)
-	if !ok {
-		return 0, fmt.Errorf("expected default value string")
-	}
 	c.mu.Lock()
-	c.Settings[group] = defaultString
+	c.Settings[fmt.Sprintf("%s/%s", group, name)] = defaultValue.Value()
 	c.mu.Unlock()
 	return 0, nil
 }
 
-func extractSettingsGroup(path dbus.ObjectPath) string {
+func (c *FakeDBusConn) handleSetValue(dest string, path dbus.ObjectPath, args []any) (int, error) {
+	if dest != "com.victronenergy.settings" {
+		return 0, fmt.Errorf("unexpected destination %s", dest)
+	}
+	if len(args) < 1 {
+		return 0, fmt.Errorf("insufficient SetValue args")
+	}
+	value, ok := args[0].(dbus.Variant)
+	if !ok {
+		return 0, fmt.Errorf("expected value variant")
+	}
+	key := extractSettingsKey(path)
+	c.mu.Lock()
+	c.Settings[key] = value.Value()
+	c.mu.Unlock()
+	return 0, nil
+}
+
+func (c *FakeDBusConn) Setting(group, name string) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	value, found := c.Settings[fmt.Sprintf("%s/%s", group, name)]
+	return value, found
+}
+
+func extractSettingsKey(path dbus.ObjectPath) string {
 	parts := strings.Split(string(path), "/")
 	if len(parts) < 5 {
 		return ""
 	}
-	return parts[3]
+	return parts[3] + "/" + parts[4]
 }
-
-// ensure FakeDBusConn satisfies the victron.DBusConn interface at compile time
-var _ victron.DBusConn = (*FakeDBusConn)(nil)
