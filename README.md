@@ -21,7 +21,7 @@ This driver creates a Victron EV Charger service and bridges data between SmartE
     - SmartEVSE → Victron (status, power, energy)
     - Victron → SmartEVSE (grid current, battery current, mode)
 - mDNS discovery or static IP configuration
-- S2 Resource Manager stub endpoint at `/S2/0/Rm` for discovery, handshake advertisement, and message logging
+- S2 Resource Manager at `/S2/0/Rm`: Dynamic ESS / Opportunity Loads can control charging via OMBC (Standby + per-ampere charge modes with min-on/min-off timers)
 
 ---
 
@@ -148,6 +148,7 @@ MQTT_BROKER=tcp://127.0.0.1:1883
 MQTT_USER=
 MQTT_PASSWD=
 # SMARTEVSE_IPS=192.168.1.50
+# S2_DEBUG=1   # log full S2 message payloads
 ```
 
 ---
@@ -218,39 +219,67 @@ http://<smartevse-ip>/settings
 
 ## Data Mapping
 
-### S2 stub (for DESS/Opportunity-load bootstrap)
+### S2 Resource Manager (Dynamic ESS / Opportunity Loads)
 
-Each exported EV charger service now also exposes `com.victronenergy.S2` on path `/S2/0/Rm` with stub transport methods:
+Each EV charger service also exposes `com.victronenergy.S2` on `/S2/0/Rm`, using Victron's S2-over-D-Bus transport (`Discover`, `Connect`, `KeepAlive`, `Message`, `Disconnect`, plus the `Message`/`Disconnect` signals). Victron CEMs (Dynamic ESS, Opportunity Loads) use it to control the charger with **Operation Mode Based Control (OMBC)**.
 
-- `Discover() -> true`
-- `Connect(client_id, keepalive_s)`
-- `KeepAlive(client_id)`
-- `Message(client_id, payload)`
-- `Disconnect(client_id)`
+**Session**
 
-Current behavior is intentionally minimal:
+- Handshake on protocol `0.0.2-beta`. `ResourceManagerDetails` is sent after `HandshakeResponse`. It advertises `NOT_CONTROLABLE` and `OPERATION_MODE_BASED_CONTROL`, L1–L3 power measurements and an instruction processing delay of 2 s.
+- `/S2/0/Active` is false on connect, true after the handshake and false on disconnect.
+- One CEM at a time: a `Connect` from a second client is rejected. `KeepAlive` or `Message` from an unknown client is answered with a `Disconnect` signal.
+- Watchdog: when a CEM is silent for more than 2.5× its keep-alive interval, the session is dropped (`Disconnect` signal "KeepAlive missed") and the charger is released.
+- `PowerMeasurement` (L1–L3 from `/Ac/Lx/Power`) is sent every 5 s.
 
-- Advertises `Handshake` with supported version `0.8`
-- Advertises schema-valid `Handshake` (`role=RM`, UUID message IDs, offered versions `0.0.2-beta` and `0.8`)
-- Advertises schema-valid `ResourceManagerDetails` for an electricity-consuming EV charger with control types `NOT_CONTROLABLE` and `OPERATION_MODE_BASED_CONTROL`
-- Waits for `HandshakeResponse` before emitting `ResourceManagerDetails` and any restored control state, which matches stricter clients such as Opportunity Loads
-- Logs all incoming and outgoing S2 payloads
-- Sends `ReceptionStatus(OK)` for incoming messages containing `message_id`
-- Maintains `/S2/0/Active` (false on connect, true after successful handshake establishment, false on disconnect)
-- Tracks selected protocol version and selected control type in endpoint `GetText()` state
-- Accepts `SelectControlType`
-- For `NOT_CONTROLABLE`, emits a schema-valid `PowerMeasurement` whose values reflect the current EV charger `/Ac/Power`, `/Ac/L1/Power`, `/Ac/L2/Power`, and `/Ac/L3/Power`
-- For `OPERATION_MODE_BASED_CONTROL`, emits minimal schema-valid `OMBC.SystemDescription` and `OMBC.Status`
-- OMBC transitions are advertised in both directions (`Idle -> Charge` and `Charge -> Idle`) so CEMs can both start and stop charging via mode switching
-- Accepts `OMBC.Instruction`, logs it, validates the requested mode/factor, and emits an updated `OMBC.Status` to simulate mode switching
-- Periodically republishes `PowerMeasurement` while `NOT_CONTROLABLE` is active
-- Periodically republishes `OMBC.Status` while `OPERATION_MODE_BASED_CONTROL` is active
-- Retains the last selected control type and simulated OMBC active mode across disconnect/reconnect, and re-advertises that state on the next connection
-- Exposes Cerbo EVCS Opportunity Loads settings paths on the EV charger service:
-  - `/S2/0/RmSettings/MaxChargePower` (writable, watt)
-  - `/S2/0/RmSettings/RememberEvPhases` (writable, switch)
+**Operation modes**
 
-No real control logic is implemented yet.
+- `Standby` (0 W) plus one **fixed-power mode per ampere**, from `MinCurrent` up to `MaxCurrent`. The top step is also capped by `/S2/0/RmSettings/MaxChargePower`.
+- Power ranges are advertised per active phase at 230 V nominal, e.g. `10A` on 3 phases is 3 × 2300 W.
+- The step size widens automatically when there would be more than 31 steps. This keeps the full-mesh transition list within the S2 limit of 1000. The top step is always included.
+- Fixed-power modes are used because Dynamic ESS always sends `operation_mode_factor = 1.0`: it picks the mode whose summed power is closest to its target. A single variable-range mode would therefore always charge at maximum. Factors between 0 and 1 are accepted but ignored, and `OMBC.Status` always reports factor 1.0.
+- Every mode can transition to every other mode. Changing between charge steps is free. Switching on and off is protected by **min-on / min-off timers of 1 minute**:
+  - `Standby → step` starts min-on and is blocked by min-off.
+  - `step → Standby` starts min-off and is blocked by min-on.
+  - A blocked instruction gets `ReceptionStatus TEMPORARY_ERROR` unless it has `abnormal_condition=true`.
+- `OMBC.TimerStatus` is sent to clients that support it. Dynamic ESS does not, so it is skipped for `dynamic_ess`.
+- On (re)selection of OMBC, the initial mode follows the charger: the nearest step if it is charging, otherwise `Standby`.
+- The `SystemDescription` is re-sent when phases, current limits or `MaxChargePower` change. An active step that disappears is moved to the nearest remaining step.
+
+**Charger control**
+
+S2 only controls the charger while Victron `/Mode` is `Auto`. Instructions are rejected with `TEMPORARY_ERROR` in other modes.
+
+| Operation mode | SmartEVSE action |
+|---|---|
+| `Standby` | `Set/Mode Pause` |
+| `<n>A` | `Set/CurrentOverride <n*10>` + `Set/Mode Smart` (Victron `/Mode` stays `Auto`) |
+
+- `/GxAutoMode/ChargingCurrent` shows the current requested by S2 (0 in Standby or when not controlled).
+- `/StartStop=Stop` by the user wins: S2 charge requests are not applied until `/StartStop=Start`.
+- On plug-in in Auto mode, the charger pauses and reports Standby to an active S2 controller, which can then issue a new charge instruction. If the previous S2 mode was charging, the min-off timer applies. The S2 session stays connected; Dynamic ESS may resend a stale setpoint if its own schedule state has not been refreshed.
+- AutoStart continues to control plug-in behavior in Manual mode. In Auto mode, the charger starts paused regardless of AutoStart, including when no S2 controller is connected.
+- **Release**: when the CEM disconnects, the keep-alive watchdog fires, the CEM selects `NOT_CONTROLABLE`, or `/Mode` leaves `Auto`, the override is cleared. A pause caused by S2 is lifted, and the charger returns to normal `Auto` (SmartEVSE `Solar`). Returning to `Auto` while a CEM is connected re-applies the active S2 mode.
+
+**Phases**
+
+- The number of phases used by the EV is detected from the measured `EVCurrentL1-3` (> 1 A) once stable for 20 s.
+- Until detection, the EV is assumed to charge on one phase, regardless of the charger's phase configuration. Actual charging can initially exceed the S2 advertised power for a multi-phase EV; the model updates after detection.
+- On unplug, phases reset to one unless `/S2/0/RmSettings/RememberEvPhases` is set. This setting retains the detected count across unplug events during the bridge's current runtime, not across bridge restarts.
+
+**Settings** (persisted in `com.victronenergy.settings/Settings/Devices/<devicename>/`)
+
+- `/S2/0/RmSettings/MaxChargePower` (W, writable; 0 = no extra cap) → `S2MaxChargePower`
+- `/S2/0/RmSettings/RememberEvPhases` (switch, writable) → `S2RememberEvPhases`
+
+**Logging**
+
+By default S2 traffic is logged as one-line summaries. `PowerMeasurement` messages and `ReceptionStatus` messages with status OK are not logged at all, and the `SystemDescription` is shown only as a mode and transition count. Set `S2_DEBUG=1` in `smartevse.env` to log full payloads.
+
+**Limitations**
+
+- Phase switching (1P/3P via `EnableC2`) is not driven by S2.
+- With a large current range the full-mesh `SystemDescription` is large (≈170 KB for 6–32 A). Validate it on the GX with the venus-s2-tools before relying on it.
+- Dynamic ESS re-sends a blocked instruction every 5 s while a timer runs, which shows up as `TEMPORARY_ERROR` lines in the log.
 
 ---
 
@@ -298,7 +327,7 @@ This makes Victron `Auto` usable with Opportunity Loads / DynamicESS: when an in
 
 - Multiple SmartEVSE chargers supported (one D-Bus service per serial)
 - Device instance allocated via `com.victronenergy.settings` (`ClassAndVrmInstance`)
-- Victron `/AutoStart` and `/Position` are persisted per charger under `com.victronenergy.settings/Settings/Devices/<devicename>/...`
+- Victron `/Mode`, `/AutoStart` and `/Position` are persisted per charger under `com.victronenergy.settings/Settings/Devices/<devicename>/...`. On first registration, `/Mode` is inferred from the SmartEVSE strategy.
 - D-Bus sender hardcoded (`com.victronenergy.vebus.ttyS4`)
 - MQTT topic prefix taken from SmartEVSE config
 - `AutoStart` is bridge-local, persisted across restarts

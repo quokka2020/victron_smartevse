@@ -17,6 +17,12 @@ func (handler *EvHandler) RegisterInVictron(vh *victron.Handler) error {
 		evse.victronEvcs.SetModeChangedCallback(evse.modeChangedCallback)
 		evse.victronEvcs.SetOverrideCurrentChangedCallback(evse.setOverrideCurrentChangedCallback)
 		evse.victronEvcs.SetStartStopChangedCallback(evse.startStopChangedCallback)
+		evse.victronEvcs.SetS2ControlCallback(evse.s2ControlCallback)
+		evse.victronEvcs.SetS2ReleaseCallback(evse.s2ReleaseCallback)
+		if evse.victronEvcs.HasPersistedMode() {
+			evse.managedMode = evse.victronEvcs.Mode()
+			evse.managedModeKnown = true
+		}
 		// AutoStart and Position are internal Victron state, managed by internal callbacks
 		evse.syncVictronState()
 

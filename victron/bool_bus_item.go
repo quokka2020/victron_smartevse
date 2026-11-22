@@ -10,7 +10,8 @@ import (
 
 type BoolBusItem struct {
 	busItemImpl
-	value bool
+	value    bool
+	callback func(value bool)
 }
 
 func NewBoolBusItem(value bool) BoolBusItem {
@@ -20,28 +21,30 @@ func NewBoolBusItem(value bool) BoolBusItem {
 func (f *BoolBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 	log.Printf("%s Received %s - %v", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value())
 
+	var value bool
 	switch v := val.Value().(type) {
 	case bool:
-		f.value = v
-		return 0, nil
+		value = v
 	case int:
-		f.value = v != 0
-		return 0, nil
+		value = v != 0
 	case int32:
-		f.value = v != 0
-		return 0, nil
+		value = v != 0
 	case int64:
-		f.value = v != 0
-		return 0, nil
+		value = v != 0
 	case uint32:
-		f.value = v != 0
-		return 0, nil
+		value = v != 0
+	default:
+		return -1, dbus.NewError(
+			"com.victronenergy.BusItem.Error",
+			[]any{fmt.Sprintf("expected bool/int for switch value, got %T", val.Value())},
+		)
 	}
 
-	return -1, dbus.NewError(
-		"com.victronenergy.BusItem.Error",
-		[]any{fmt.Sprintf("expected bool/int for switch value, got %T", val.Value())},
-	)
+	f.value = value
+	if f.callback != nil {
+		f.callback(value)
+	}
+	return 0, nil
 }
 
 func (f *BoolBusItem) GetValue() (dbus.Variant, *dbus.Error) {

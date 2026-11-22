@@ -47,3 +47,56 @@ func TestEvChargerPersistsAutoStartAndPositionOnDBusWrites(t *testing.T) {
 	assert.Equal(t, int32(EV_Position_AC_Input), storedPosition)
 	assert.Equal(t, EV_Position_AC_Input, charger.Position())
 }
+
+func TestEvChargerPersistsAndRestoresMode(t *testing.T) {
+	conn := testhelper.NewFakeDBusConn()
+	handler := NewHandlerWithConn(conn)
+	charger, err := handler.CreateEvCharger(1001, "v3", "test", 6, 16, 32, 0, 0)
+	require.NoError(t, err)
+	assert.False(t, charger.HasPersistedMode())
+
+	result, dbusErr := charger.mode.SetValue(dbus.MakeVariant(int32(EV_Mode_Auto)))
+	require.Nil(t, dbusErr)
+	require.Zero(t, result)
+	stored, found := conn.Setting("smartevse_1001", "Mode")
+	require.True(t, found)
+	assert.Equal(t, int32(EV_Mode_Auto), stored)
+	charger.Close()
+
+	restarted, err := handler.CreateEvCharger(1001, "v3", "test", 6, 16, 32, 0, 0)
+	require.NoError(t, err)
+	defer restarted.Close()
+	assert.True(t, restarted.HasPersistedMode())
+	assert.Equal(t, EV_Mode_Auto, restarted.Mode())
+
+	restarted.SetMode(EV_Mode_Scheduled)
+	stored, _ = conn.Setting("smartevse_1001", "Mode")
+	assert.Equal(t, int32(EV_Mode_Scheduled), stored)
+	result, dbusErr = restarted.mode.SetValue(dbus.MakeVariant(int32(3)))
+	assert.NotNil(t, dbusErr)
+	assert.Equal(t, -1, result)
+	stored, _ = conn.Setting("smartevse_1001", "Mode")
+	assert.Equal(t, int32(EV_Mode_Scheduled), stored)
+}
+
+func TestEvChargerPersistsInitialManualMode(t *testing.T) {
+	conn := testhelper.NewFakeDBusConn()
+	handler := NewHandlerWithConn(conn)
+	charger, err := handler.CreateEvCharger(1001, "v3", "test", 6, 16, 32, 0, 0)
+	require.NoError(t, err)
+	defer charger.Close()
+
+	result, dbusErr := charger.mode.SetValue(dbus.MakeVariant(int32(EV_Mode_Manual)))
+	require.Nil(t, dbusErr)
+	assert.Zero(t, result)
+	value, _ := conn.Setting("smartevse_1001", "Mode")
+	assert.Equal(t, int32(EV_Mode_Manual), value)
+}
+
+func TestEvChargerRejectsInvalidPersistedMode(t *testing.T) {
+	conn := testhelper.NewFakeDBusConn()
+	conn.Settings["smartevse_1001/Mode"] = int32(7)
+	handler := NewHandlerWithConn(conn)
+	_, err := handler.CreateEvCharger(1001, "v3", "test", 6, 16, 32, 0, 0)
+	require.ErrorContains(t, err, "invalid persisted /Mode: 7")
+}

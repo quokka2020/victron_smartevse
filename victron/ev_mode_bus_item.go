@@ -31,6 +31,10 @@ type EvModeBusItem struct {
 	busItemImpl
 	mode     EV_Mode
 	callback func(mode EV_Mode) error
+	// changed is called after the stored mode actually changed, either via a
+	// D-Bus write or an internal change.
+	changed func(oldMode, newMode EV_Mode)
+	written func(mode EV_Mode)
 }
 
 func NewEvModeBusItem(mode EV_Mode) EvModeBusItem {
@@ -63,7 +67,10 @@ func (f *EvModeBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 		}
 	}
 
-	f.mode = new_mode
+	f.change(new_mode)
+	if f.written != nil {
+		f.written(new_mode)
+	}
 	return 0, nil
 }
 
@@ -76,5 +83,9 @@ func (f *EvModeBusItem) GetText() (string, *dbus.Error) {
 }
 
 func (f *EvModeBusItem) change(mode EV_Mode) {
+	oldMode := f.mode
 	f.mode = mode
+	if oldMode != mode && f.changed != nil {
+		f.changed(oldMode, mode)
+	}
 }

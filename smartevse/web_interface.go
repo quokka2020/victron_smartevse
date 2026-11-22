@@ -26,11 +26,13 @@ type Settings struct {
 	CurrentMax      float64 `json:"current_max"`
 	ChargeCurrent   float64 `json:"charge_current"`
 	OverrideCurrent float64 `json:"override_current"`
+	EnableC2        string  `json:"enable_C2"`
 }
 
 type Evse struct {
-	Access int    `json:"access"`
-	State  string `json:"state"`
+	Access     int    `json:"access"`
+	State      string `json:"state"`
+	NrOfPhases int    `json:"nrofphases"`
 }
 
 type EvMeter struct {

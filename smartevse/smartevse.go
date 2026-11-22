@@ -55,6 +55,8 @@ type SmartEVSE struct {
 
 	sessionTime     float64
 	lastSessionTime float64
+
+	s2 s2State
 }
 
 var smartevseIps = util.GetEnv("SMARTEVSE_IPS", "")
@@ -474,13 +476,17 @@ func (smartEvse *SmartEVSE) mqttReceived(topic string, value string) {
 		previousPlugState := smartEvse.evPlugState
 		smartEvse.evPlugState = value
 		updateState = true
-		smartEvse.enforcePauseOnConnectIfAutoStartDisabled(previousPlugState)
-		smartEvse.clearPauseOnReconnectIfNeeded(previousPlugState)
+		if !smartEvse.handleS2PlugChange(previousPlugState) {
+			smartEvse.enforcePauseOnConnectIfAutoStartDisabled(previousPlugState)
+			smartEvse.clearPauseOnReconnectIfNeeded(previousPlugState)
+		}
 	case "Error":
 	case "Mode":
+		previousMode := smartEvse.mode
 		smartEvse.applyRunningModeLocally(value)
 		if isStrategyMode(value) {
-			if !(smartEvse.managedModeKnown && smartEvse.targetStrategyForManagedMode() == canonicalizeSmartEVSEMode(value)) {
+			unchanged := smartEvse.managedModeKnown && canonicalizeSmartEVSEMode(previousMode) == canonicalizeSmartEVSEMode(value)
+			if !unchanged && !(smartEvse.managedModeKnown && smartEvse.targetStrategyForManagedMode() == canonicalizeSmartEVSEMode(value)) {
 				smartEvse.managedMode = smartEvse.managedModeFromRuntime()
 				smartEvse.managedModeKnown = true
 			}
@@ -509,16 +515,19 @@ func (smartEvse *SmartEVSE) mqttReceived(topic string, value string) {
 	switch sub {
 	case "EVCurrentL1":
 		smartEvse.victronEvcs.ChangeCurrentL1(i / 10)
+		smartEvse.updatePhaseCurrent(0, i/10)
 		if i > 0 {
 			smartEvse.setSessionTime()
 		}
 	case "EVCurrentL2":
 		smartEvse.victronEvcs.ChangeCurrentL2(i / 10)
+		smartEvse.updatePhaseCurrent(1, i/10)
 		if i > 0 {
 			smartEvse.setSessionTime()
 		}
 	case "EVCurrentL3":
 		smartEvse.victronEvcs.ChangeCurrentL3(i / 10)
+		smartEvse.updatePhaseCurrent(2, i/10)
 		if i > 0 {
 			smartEvse.setSessionTime()
 		}
@@ -583,7 +592,13 @@ func (smartEvse *SmartEVSE) setOverrideCurrentChangedCallback(value, _, max floa
 func (smartEvse *SmartEVSE) startStopChangedCallback(mode victron.EvStartStop) {
 	log.Printf("Request to change start/stop to: %d", mode)
 	if mode == victron.EvStartStopStop {
+		smartEvse.s2.userPaused = true
 		smartEvse.requestRunningMode("Pause")
+		return
+	}
+	smartEvse.s2.userPaused = false
+	if smartEvse.s2Controlled() {
+		smartEvse.applyS2Command()
 		return
 	}
 	smartEvse.requestRunningMode(smartEvse.targetStrategyForManagedMode())

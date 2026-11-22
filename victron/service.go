@@ -176,6 +176,31 @@ func (s *Service) GetOrCreateDeviceIntSetting(name string, defaultValue int32, m
 }
 
 func (s *Service) SetDeviceIntSetting(name string, value int32) error {
+	return s.setDeviceSetting(name, value)
+}
+
+func (s *Service) GetOrCreateDeviceFloatSetting(name string, defaultValue float64, minimum float64, maximum float64) (float64, error) {
+	var value float64
+	if err := s.getDeviceSetting(name, &value); err == nil {
+		return value, nil
+	}
+
+	if err := s.addDeviceSetting(name, defaultValue, "f", minimum, maximum); err != nil {
+		return 0, err
+	}
+
+	if err := s.getDeviceSetting(name, &value); err != nil {
+		return 0, err
+	}
+
+	return value, nil
+}
+
+func (s *Service) SetDeviceFloatSetting(name string, value float64) error {
+	return s.setDeviceSetting(name, value)
+}
+
+func (s *Service) setDeviceSetting(name string, value any) error {
 	var result int
 	err := s.parent.dbusConn.Object("com.victronenergy.settings", s.deviceSettingPath(name)).Call(
 		"SetValue",

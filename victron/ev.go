@@ -77,10 +77,15 @@ com.victronenergy.evcharger
 type EvCharger struct {
 	parent          *Handler
 	service         *Service
-	s2              *s2RMStub
+	s2              *s2ResourceManager
 	running         bool
 	constantPaths   map[string]BusItem
 	modifiablePaths map[string]BusItem
+
+	s2ControlCallback func(cmd S2ChargeCommand)
+	s2ReleaseCallback func()
+	evPhases          int
+	modePersisted     bool
 
 	connected ManualBusItem // /Connected  int32: 0=offline 1=online
 
@@ -109,14 +114,15 @@ type EvCharger struct {
 	position  EvPositionBusItem // /Position
 
 	s2Active           BoolBusItem // /S2/0/Active
-	s2MaxChargePower   UnitBusItem // /S2/0/RmSettings/MaxChargePower   (not used yet)
-	s2RememberEvPhases BoolBusItem // /S2/0/RmSettings/RememberEvPhases (not used yet)
+	s2MaxChargePower   UnitBusItem // /S2/0/RmSettings/MaxChargePower
+	s2RememberEvPhases BoolBusItem // /S2/0/RmSettings/RememberEvPhases
+	gxChargingCurrent  UnitBusItem // /GxAutoMode/ChargingCurrent (current requested by S2 control)
 }
 
 func newEvChargerFields(parent *Handler, min, current, max, sessionEnergy, total float64) EvCharger {
 	return EvCharger{
-		parent: parent,
-
+		parent:    parent,
+		evPhases:  s2DefaultEVPhases,
 		connected: *NewManualBusItem(int32(0), "Disconnected"),
 
 		power:   NewUnitFormatterObject(0, "W", 1),
@@ -145,6 +151,7 @@ func newEvChargerFields(parent *Handler, min, current, max, sessionEnergy, total
 		s2Active:           NewBoolBusItem(false),
 		s2MaxChargePower:   NewUnitFormatterObject(max*230*3, "W", 0),
 		s2RememberEvPhases: NewBoolBusItem(false),
+		gxChargingCurrent:  NewUnitFormatterObject(0, "A", 0),
 	}
 }
 
@@ -173,6 +180,7 @@ func (ev *EvCharger) initModifyableItems() {
 		"/S2/0/Active":                      &ev.s2Active,
 		"/S2/0/RmSettings/MaxChargePower":   &ev.s2MaxChargePower,
 		"/S2/0/RmSettings/RememberEvPhases": &ev.s2RememberEvPhases,
+		"/GxAutoMode/ChargingCurrent":       &ev.gxChargingCurrent,
 	}
 }
 
@@ -202,6 +210,8 @@ func (h *Handler) CreateEvCharger(serial int, version, connection string, min, c
 	// Set internal callbacks for persistence management - these are not exposed publicly
 	ev.setAutoStartChangedCallback(ev.handleAutoStartChanged)
 	ev.setPositionChangedCallback(ev.handlePositionChanged)
+	ev.s2MaxChargePower.callback = ev.handleS2MaxChargePowerChanged
+	ev.s2RememberEvPhases.callback = ev.handleS2RememberEvPhasesChanged
 
 	ev.constantPaths = map[string]BusItem{
 		"/ProductName":          NewAnyBusItem("SmartEVSE"),
@@ -243,18 +253,30 @@ func (h *Handler) CreateEvCharger(serial int, version, connection string, min, c
 	ev.notify(&ev.autostart)
 	ev.notify(&ev.position)
 
-	ev.s2 = newS2RMStub(h.dbusConn, deviceName)
+	ev.s2 = newS2ResourceManager(h.dbusConn, deviceName)
 	ev.s2.defaultControlType = ""
-	ev.s2.ombcBootstrapDelay = 2 * time.Second
 	ev.s2.ombcReadyReader = ev.IsOmbcReady
-	ev.s2.powerReader = ev.GetAcPower
 	ev.s2.powerL1Reader = ev.GetAcL1Power
 	ev.s2.powerL2Reader = ev.GetAcL2Power
 	ev.s2.powerL3Reader = ev.GetAcL3Power
 	ev.s2.maxChargePowerReader = ev.GetS2MaxChargePower
+	ev.s2.minCurrentReader = func() float64 { return ev.minCurrent.value }
+	ev.s2.maxCurrentReader = func() float64 { return ev.maxCurrent.value }
+	ev.s2.phasesReader = ev.EvPhases
+	ev.s2.autoModeReader = func() bool { return ev.mode.mode == EV_Mode_Auto }
+	ev.s2.chargerStateReader = func() (bool, float64) {
+		return ev.status.status == EV_Status_Charging, ev.current.value
+	}
+	ev.s2.controlCallback = ev.applyS2Command
+	ev.s2.releaseCallback = ev.releaseS2Control
 	ev.s2.sessionActiveChanged = ev.setS2Active
+	ev.mode.changed = func(oldMode, newMode EV_Mode) {
+		ev.persistMode(newMode)
+		ev.s2.onModeChanged(oldMode, newMode)
+	}
+	ev.mode.written = ev.ensureModePersisted
 	if err := ev.s2.Export(); err != nil {
-		return ev.returnAndClose(fmt.Errorf("failed to export s2 stub: %w", err))
+		return ev.returnAndClose(fmt.Errorf("failed to export s2 resource manager: %w", err))
 	}
 
 	err = ev.service.Register()
@@ -279,6 +301,18 @@ func (h *Handler) CreateEvCharger(serial int, version, connection string, min, c
 }
 
 func (ev *EvCharger) restorePersistentSettings() error {
+	persistedMode, err := ev.service.GetOrCreateDeviceIntSetting("Mode", -1, -1, int32(EV_Mode_Scheduled))
+	if err != nil {
+		return err
+	}
+	if persistedMode != -1 {
+		if _, ok := ev_mode[EV_Mode(persistedMode)]; !ok {
+			return fmt.Errorf("invalid persisted /Mode: %d", persistedMode)
+		}
+		ev.mode.change(EV_Mode(persistedMode))
+		ev.modePersisted = true
+	}
+
 	persistedAutoStart, err := ev.service.GetOrCreateDeviceIntSetting("AutoStart", int32(ev.autostart.autostart), int32(EV_AutoStart_Disabled), int32(EV_AutoStart_Enabled))
 	if err != nil {
 		return err
@@ -295,7 +329,45 @@ func (ev *EvCharger) restorePersistentSettings() error {
 		ev.position.change(EV_Position(persistedPosition))
 	}
 
+	persistedMaxChargePower, err := ev.service.GetOrCreateDeviceFloatSetting(s2MaxChargePowerSetting, ev.s2MaxChargePower.value, 0, 100000)
+	if err != nil {
+		return err
+	}
+	if persistedMaxChargePower >= 0 {
+		ev.s2MaxChargePower.change(persistedMaxChargePower)
+	}
+
+	persistedRememberEvPhases, err := ev.service.GetOrCreateDeviceIntSetting(s2RememberEvPhasesSetting, boolToInt32(ev.s2RememberEvPhases.value), 0, 1)
+	if err != nil {
+		return err
+	}
+	ev.s2RememberEvPhases.change(persistedRememberEvPhases != 0)
+
 	return nil
+}
+
+const (
+	s2MaxChargePowerSetting   = "S2MaxChargePower"
+	s2RememberEvPhasesSetting = "S2RememberEvPhases"
+)
+
+func boolToInt32(value bool) int32 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func (ev *EvCharger) handleS2MaxChargePowerChanged(value float64) {
+	if err := ev.service.SetDeviceFloatSetting(s2MaxChargePowerSetting, value); err != nil {
+		log.Printf("persist /S2/0/RmSettings/MaxChargePower: %v", err)
+	}
+}
+
+func (ev *EvCharger) handleS2RememberEvPhasesChanged(value bool) {
+	if err := ev.service.SetDeviceIntSetting(s2RememberEvPhasesSetting, boolToInt32(value)); err != nil {
+		log.Printf("persist /S2/0/RmSettings/RememberEvPhases: %v", err)
+	}
 }
 
 func (ev *EvCharger) handleAutoStartChanged(mode EV_AutoStart) {
@@ -308,6 +380,26 @@ func (ev *EvCharger) handlePositionChanged(position EV_Position) {
 	if err := ev.service.SetDeviceIntSetting("Position", int32(position)); err != nil {
 		log.Printf("persist /Position: %v", err)
 	}
+}
+
+func (ev *EvCharger) persistMode(mode EV_Mode) {
+	if err := ev.service.SetDeviceIntSetting("Mode", int32(mode)); err != nil {
+		ev.modePersisted = false
+		log.Printf("persist /Mode: %v", err)
+		return
+	}
+	ev.modePersisted = true
+}
+
+func (ev *EvCharger) ensureModePersisted(mode EV_Mode) {
+	if !ev.modePersisted {
+		ev.persistMode(mode)
+	}
+}
+
+// HasPersistedMode distinguishes a saved mode from a newly created setting.
+func (ev *EvCharger) HasPersistedMode() bool {
+	return ev.modePersisted
 }
 
 func (ev *EvCharger) returnAndClose(err error) (*EvCharger, error) {
@@ -407,6 +499,75 @@ func (ev *EvCharger) IsOmbcReady() bool {
 
 func (ev *EvCharger) GetS2MaxChargePower() float64 {
 	return ev.s2MaxChargePower.value
+}
+
+// SetS2ControlCallback registers the handler that drives the charger for the
+// operation mode selected by an S2 CEM (Dynamic ESS, Opportunity Loads).
+func (ev *EvCharger) SetS2ControlCallback(callback func(cmd S2ChargeCommand)) {
+	ev.s2ControlCallback = callback
+}
+
+// SetS2ReleaseCallback registers the handler that returns the charger to its
+// normal behaviour when S2 control ends.
+func (ev *EvCharger) SetS2ReleaseCallback(callback func()) {
+	ev.s2ReleaseCallback = callback
+}
+
+// ResetS2OnPlugIn reports Standby to the active S2 controller for a new EV.
+func (ev *EvCharger) ResetS2OnPlugIn() {
+	ev.setGxChargingCurrent(0)
+	ev.s2.onVehiclePluggedIn()
+}
+
+func (ev *EvCharger) applyS2Command(cmd S2ChargeCommand) {
+	if cmd.Charge {
+		ev.setGxChargingCurrent(cmd.CurrentA)
+	} else {
+		ev.setGxChargingCurrent(0)
+	}
+	if ev.s2ControlCallback != nil {
+		ev.s2ControlCallback(cmd)
+	}
+}
+
+func (ev *EvCharger) releaseS2Control() {
+	ev.setGxChargingCurrent(0)
+	if ev.s2ReleaseCallback != nil {
+		ev.s2ReleaseCallback()
+	}
+}
+
+func (ev *EvCharger) setGxChargingCurrent(current float64) {
+	ev.gxChargingCurrent.change(current)
+	ev.notify(&ev.gxChargingCurrent)
+}
+
+// SetEvPhases sets the number of phases the connected EV charges on. It is
+// used to build the S2 charge model.
+func (ev *EvCharger) SetEvPhases(phases int) {
+	if phases < 1 || phases > s2DefaultMaxPhase {
+		return
+	}
+	ev.evPhases = phases
+}
+
+// ResetEvPhases restores the default assumption for a new EV.
+func (ev *EvCharger) ResetEvPhases() {
+	ev.SetEvPhases(s2DefaultEVPhases)
+}
+
+func (ev *EvCharger) EvPhases() int {
+	return ev.evPhases
+}
+
+// RememberEvPhases reports /S2/0/RmSettings/RememberEvPhases: keep the detected
+// phase count after the EV is unplugged.
+func (ev *EvCharger) RememberEvPhases() bool {
+	return ev.s2RememberEvPhases.value
+}
+
+func (ev *EvCharger) Mode() EV_Mode {
+	return ev.mode.mode
 }
 
 func (ev *EvCharger) setS2Active(active bool) {
@@ -537,6 +698,7 @@ func (ev *EvCharger) SetStatus(status EV_Status) {
 
 func (ev *EvCharger) SetMode(mode EV_Mode) {
 	ev.mode.change(mode)
+	ev.ensureModePersisted(mode)
 	ev.notify(&ev.mode)
 }
 

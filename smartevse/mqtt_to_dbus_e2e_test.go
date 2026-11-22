@@ -138,11 +138,62 @@ func TestMQTTToDBusE2E_RegisterInVictronRestoresPersistentAutoStart(t *testing.T
 		managedMode:        victron.EV_Mode_Manual,
 		managedModeKnown:   true,
 	}
+
 	handler := &EvHandler{evs: []*SmartEVSE{ev}}
 	require.NoError(t, handler.RegisterInVictron(vh))
 
 	assert.Equal(t, int32(victron.EV_AutoStart_Disabled), requirePathValue[int32](t, "/AutoStart", fakeConn))
 	assert.Equal(t, "Disabled", requirePathText(t, "/AutoStart", fakeConn))
+}
+
+func TestMQTTToDBusE2E_RestoresModeAcrossRestart(t *testing.T) {
+	conn := newFakeDBusConn()
+	first, charger, _ := newMQTTToDBusTestEVWithConn(t, conn)
+	require.NoError(t, first.modeChangedCallback(victron.EV_Mode_Auto))
+	assert.Equal(t, victron.EV_Mode_Auto, charger.Mode())
+	charger.Close()
+
+	restarted, restoredCharger, _ := newMQTTToDBusTestEVWithConn(t, conn, func(ev *SmartEVSE) {
+		ev.mode = "Smart"
+		ev.activeStrategyMode = "Smart"
+	})
+	assert.Equal(t, victron.EV_Mode_Auto, restoredCharger.Mode())
+	for i := 0; i < 2; i++ {
+		restarted.mqttReceived("SmartEVSE/Mode", "Smart")
+		assert.Equal(t, victron.EV_Mode_Auto, restoredCharger.Mode())
+	}
+	stored, _ := conn.Setting("smartevse_1001", "Mode")
+	assert.Equal(t, int32(victron.EV_Mode_Auto), stored)
+
+	restarted.mqttReceived("SmartEVSE/Mode", "Solar")
+	restarted.mqttReceived("SmartEVSE/Mode", "Smart")
+	assert.Equal(t, victron.EV_Mode_Manual, restoredCharger.Mode())
+	stored, _ = conn.Setting("smartevse_1001", "Mode")
+	assert.Equal(t, int32(victron.EV_Mode_Manual), stored)
+}
+
+func TestMQTTToDBusE2E_FirstModeUsesSmartEVSEStrategy(t *testing.T) {
+	ev, charger, conn := newMQTTToDBusTestEV(t, func(ev *SmartEVSE) {
+		ev.mode = "Solar"
+		ev.activeStrategyMode = "Solar"
+		ev.managedMode = victron.EV_Mode_Auto
+	})
+	assert.Equal(t, victron.EV_Mode_Auto, charger.Mode())
+	assert.Equal(t, victron.EV_Mode_Auto, ev.effectiveManagedMode())
+	stored, _ := conn.Setting("smartevse_1001", "Mode")
+	assert.Equal(t, int32(victron.EV_Mode_Auto), stored)
+}
+
+func TestMQTTToDBusE2E_RestoresScheduledMode(t *testing.T) {
+	conn := newFakeDBusConn()
+	conn.Settings["smartevse_1001/Mode"] = int32(victron.EV_Mode_Scheduled)
+	ev, charger, _ := newMQTTToDBusTestEVWithConn(t, conn, func(ev *SmartEVSE) {
+		ev.mode = "Solar"
+		ev.activeStrategyMode = "Solar"
+	})
+	assert.Equal(t, victron.EV_Mode_Scheduled, charger.Mode())
+	ev.mqttReceived("SmartEVSE/Mode", "Solar")
+	assert.Equal(t, victron.EV_Mode_Scheduled, charger.Mode())
 }
 
 func TestMQTTToDBusE2E_ConnectionAndStateMapping(t *testing.T) {
