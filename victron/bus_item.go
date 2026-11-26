@@ -8,29 +8,29 @@ import (
 
 type BusItem interface {
 	getObjectPath() dbus.ObjectPath
-	setObjectPath(object_path dbus.ObjectPath)
+	setObjectPath(objectPath dbus.ObjectPath)
 	GetValue() (dbus.Variant, *dbus.Error)
 	GetText() (string, *dbus.Error)
 	SetValue(value dbus.Variant) (int, *dbus.Error)
 }
 
-type bus_item_impl struct {
-	object_path dbus.ObjectPath
+type busItemImpl struct {
+	objectPath dbus.ObjectPath
 }
 
-func (i *bus_item_impl) getObjectPath() dbus.ObjectPath {
-	return i.object_path
+func (i *busItemImpl) getObjectPath() dbus.ObjectPath {
+	return i.objectPath
 }
 
-func (i *bus_item_impl) setObjectPath(object_path dbus.ObjectPath) {
-	i.object_path = object_path
+func (i *busItemImpl) setObjectPath(objectPath dbus.ObjectPath) {
+	i.objectPath = objectPath
 }
 
-// variant_int_value extracts an integer from a dbus.Variant using a type
+// variantIntValue extracts an integer from a dbus.Variant using a type
 // switch over the concrete Go types that godbus produces. Using val.String()
 // would return GVariant text format (e.g. "uint32:1") which cannot be parsed
 // as a plain integer.
-func variant_int_value(val dbus.Variant) (int64, *dbus.Error) {
+func variantIntValue(val dbus.Variant) (int64, *dbus.Error) {
 	switch v := val.Value().(type) {
 	case int:
 		return int64(v), nil
@@ -53,10 +53,10 @@ func variant_int_value(val dbus.Variant) (int64, *dbus.Error) {
 	)
 }
 
-// variant_float_value extracts a float64 from a dbus.Variant using a type
+// variantFloatValue extracts a float64 from a dbus.Variant using a type
 // switch. The dbus-modbus-client sends uint16 for current/power registers,
 // so we must handle integer types in addition to float64.
-func variant_float_value(val dbus.Variant) (float64, *dbus.Error) {
+func variantFloatValue(val dbus.Variant) (float64, *dbus.Error) {
 	switch v := val.Value().(type) {
 	case float64:
 		return v, nil

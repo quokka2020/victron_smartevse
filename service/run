@@ -1,5 +1,6 @@
 #!/bin/sh
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SCRIPT_DIR=$( cd -- "$( dirname -- "$0" )" &> /dev/null && pwd )
+ROOT_DIR=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
 
 exec 2>&1
-$(realpath $SCRIPT_DIR/../victron_smartevse) -envfile $(realpath $SCRIPT_DIR/../smartevse.env)
+exec $ROOT_DIR/victron_smartevse -envfile $ROOT_DIR/smartevse.env

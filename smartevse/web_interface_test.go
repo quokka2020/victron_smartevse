@@ -15,7 +15,7 @@ var testdata embed.FS
 
 func TestParseSettings(t *testing.T) {
 	var err error
-	raw := Smartevse_raw{}
+	raw := Raw{}
 	data, err := testdata.ReadFile("testdata/raw.json")
 	assert.Nil(t, err)
 	err = json.Unmarshal(data, &raw)
@@ -29,15 +29,15 @@ func TestParseSettings(t *testing.T) {
 	assert.NotNil(t, raw.MQTT)
 	assert.Equal(t, "SmartEVSE", raw.MQTT.Prefix)
 
-	assert.Equal(t, 6.0, raw.Settings.Current_Min)
-	assert.Equal(t, 60.0, raw.Settings.Charge_Current)
-	assert.Equal(t, 13.0, raw.Settings.Current_Max)
-	assert.Equal(t, 0.0, raw.Settings.Override_Current)
+	assert.Equal(t, 6.0, raw.Settings.CurrentMin)
+	assert.Equal(t, 60.0, raw.Settings.ChargeCurrent)
+	assert.Equal(t, 13.0, raw.Settings.CurrentMax)
+	assert.Equal(t, 0.0, raw.Settings.OverrideCurrent)
 	assert.NotNil(t, raw.Evse)
 	assert.Equal(t, 1, raw.Evse.Access)
 	assert.Equal(t, "Charging Stopped - No Power Available", raw.Evse.State)
-	assert.Equal(t, 3255525.0, raw.EvMeter.Total_Wh)
-	assert.Equal(t, 6721.0, raw.EvMeter.Charged_Wh)
+	assert.Equal(t, 3255525.0, raw.EvMeter.TotalWh)
+	assert.Equal(t, 6721.0, raw.EvMeter.ChargedWh)
 
 }
 

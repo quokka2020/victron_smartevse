@@ -21,7 +21,7 @@ var ev_position_text = map[EV_Position]string{
 }
 
 type EvPositionBusItem struct {
-	bus_item_impl
+	busItemImpl
 	position EV_Position
 	callback func(EV_Position)
 }
@@ -32,7 +32,7 @@ func NewEvPositionBusItem(position EV_Position) EvPositionBusItem {
 
 func (f *EvPositionBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 	log.Printf("%s Received %s - %v", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value())
-	v, err := variant_int_value(val)
+	v, err := variantIntValue(val)
 	if err != nil {
 		return -1, err
 	}

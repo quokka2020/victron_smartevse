@@ -9,7 +9,7 @@ import (
 )
 
 type MinMaxUnitBusItem struct {
-	bus_item_impl
+	busItemImpl
 
 	unit      string
 	value     float64
@@ -31,7 +31,7 @@ func NewMinMaxUnitBusItem(value, min, max float64, unit string, presision int) M
 
 func (f *MinMaxUnitBusItem) SetValue(val dbus.Variant) (int, *dbus.Error) {
 	log.Printf("%s Received %s - %v", f.getObjectPath(), reflect.TypeOf(val.Value()), val.Value())
-	value, err := variant_float_value(val)
+	value, err := variantFloatValue(val)
 	if err != nil {
 		return -1, err
 	}

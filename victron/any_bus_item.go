@@ -9,7 +9,7 @@ import (
 )
 
 type AnyBusItem struct {
-	bus_item_impl
+	busItemImpl
 	value any
 }
 

@@ -18,12 +18,12 @@ import (
 	_ "time/tzdata"
 )
 
-var mqtt_prefix = util.GetEnv("MQTT_PREFIX", "victron_smartevse")
-var log_file = util.GetEnv("LOG_FILE", "")
+var mqttPrefix = util.GetEnv("MQTT_PREFIX", "victron_smartevse")
+var logFile = util.GetEnv("LOG_FILE", "")
 
 func main() {
-	if log_file != "" {
-		logFile, err := os.OpenFile(log_file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if logFile != "" {
+		logFile, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			log.Fatalf("Failed to open log file: %v", err)
 		}
@@ -42,46 +42,42 @@ func main() {
 
 	log.Printf("Starting version %s BuildTime: %s", global.Version, global.BuildTime)
 
-	//log.Printf("Waiting for system to fully start (1 min)")
-	//
-	//<-time.After(1 * time.Minute)
-
-	mqtt := mqtthelper.CreateMqttHelper(mqtt_prefix)
+	mqtt := mqtthelper.CreateMqttHelper(mqttPrefix)
 	defer mqtt.Close()
 
 	ev, err := smartevse.NewEvHandler(mqtt)
 	if err != nil {
-		log.Fatalf("Failed to init smartevse err:%v", err)
+		log.Fatalf("Failed to init SmartEVSE err:%v", err)
 	}
 	defer ev.Close()
 
-	victron, err := victron.NewVictronHandler()
+	victronHandler, err := victron.NewHandler()
 	if err != nil {
-		log.Fatalf("Failed to init victron err:%v", err)
+		log.Fatalf("Failed to init Victron err:%v", err)
 	}
-	defer victron.Close()
+	defer victronHandler.Close()
 
-	err = ev.RegisterInVictron(victron)
+	err = ev.RegisterInVictron(victronHandler)
 	if err != nil {
-		log.Fatalf("Failed to init victron err:%v", err)
+		log.Fatalf("Failed to init Victron err:%v", err)
 	}
 
-	go victron.Listen()
+	go victronHandler.Listen()
 
 	// Give
 	<-time.After(5 * time.Second)
 
 	log.Printf("Starting loop")
+	ev.WriteMainsMeter()
+	ev.WriteHomeBattery()
+	publishTicker := time.NewTicker(2 * time.Second)
+	defer publishTicker.Stop()
 loop:
 	for {
-		// victron.ListNames()
-		// current.PublishAll()
-		ev.WriteMainsmeter()
-		ev.WriteHomebattery()
-
 		select {
-		case <-time.After(2 * time.Second):
-			// case <-time.After(10 * time.Second):
+		case <-publishTicker.C:
+			ev.WriteMainsMeter()
+			ev.WriteHomeBattery()
 
 		case <-sigquit:
 			log.Printf("Received a sigquit")
