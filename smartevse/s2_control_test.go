@@ -238,3 +238,41 @@ func TestS2PhaseDetectionRemembersPhasesWhenConfigured(t *testing.T) {
 	evse.mqttReceived("SmartEVSE/EVPlugState", "Disconnected")
 	assert.Equal(t, 2, charger.EvPhases())
 }
+
+// The SmartEVSE ignores a non-zero CurrentOverride unless it is in Smart (or Normal)
+// mode, so resuming from Standby in Solar must request Smart before the override.
+func TestS2ControlSendsModeBeforeOverride(t *testing.T) {
+	evse, _, _, messages := newS2TestEV(t)
+
+	evse.s2ControlCallback(victron.S2ChargeCommand{Charge: false})
+	*messages = (*messages)[:0]
+
+	evse.s2ControlCallback(victron.S2ChargeCommand{Charge: true, CurrentA: 6})
+	require.Len(t, *messages, 2)
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/Mode", payload: "Smart"}, (*messages)[0])
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/CurrentOverride", payload: "60"}, (*messages)[1])
+}
+
+func TestS2ControlResendsOverrideTheSmartEVSEDropped(t *testing.T) {
+	evse, _, _, messages := newS2TestEV(t)
+
+	evse.s2ControlCallback(victron.S2ChargeCommand{Charge: true, CurrentA: 6})
+	evse.mqttReceived("SmartEVSE/Mode", "Smart")
+	*messages = (*messages)[:0]
+
+	evse.mqttReceived("SmartEVSE/ChargeCurrentOverride", "0")
+	assert.Equal(t, []string{"60"}, publishedTo(*messages, "SmartEVSE/Set/CurrentOverride"))
+
+	// matching report: nothing to resend
+	evse.mqttReceived("SmartEVSE/ChargeCurrentOverride", "60")
+	assert.Equal(t, []string{"60"}, publishedTo(*messages, "SmartEVSE/Set/CurrentOverride"))
+	assert.Equal(t, 6.0, evse.overrideCurrent)
+}
+
+func TestS2ControlKeepsOverrideWithinChargerLimits(t *testing.T) {
+	evse, _, _, messages := newS2TestEV(t)
+
+	evse.s2ControlCallback(victron.S2ChargeCommand{Charge: true, CurrentA: 4})
+	evse.s2ControlCallback(victron.S2ChargeCommand{Charge: true, CurrentA: 40})
+	assert.Equal(t, []string{"60", "320"}, publishedTo(*messages, "SmartEVSE/Set/CurrentOverride"))
+}

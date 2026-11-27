@@ -65,10 +65,8 @@ func (smartEvse *SmartEVSE) applyS2Command() {
 		return
 	}
 	smartEvse.s2.paused = false
-	smartEvse.setManagedAutoControl(true, cmd.CurrentA)
-	if smartEvse.isPaused() {
-		smartEvse.requestRunningMode(smartEvse.targetStrategyForManagedMode())
-	}
+	// resumes from Standby (Pause) too; Smart is requested before the override is sent
+	smartEvse.applyManagedAutoControl(true, cmd.CurrentA, true)
 }
 
 // s2ReleaseCallback returns the charger to normal operation when S2 control
