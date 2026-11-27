@@ -236,7 +236,7 @@ var floatSubtopics = []string{
 	"EVCurrentL3",
 	"MaxCurrent",
 	"ChargeCurrent",
-	"CurrentOverride",
+	"ChargeCurrentOverride",
 	"EVChargePower",
 	"EVEnergyCharged",
 	"EVTotalEnergyCharged",
@@ -416,6 +416,14 @@ func (smartEvse *SmartEVSE) requestRunningMode(mode string) {
 }
 
 func (smartEvse *SmartEVSE) setManagedAutoControl(active bool, overrideCurrent float64) {
+	smartEvse.applyManagedAutoControl(active, overrideCurrent, false)
+}
+
+// applyManagedAutoControl switches the running mode for managed control and then
+// sends the current override. The order matters: the SmartEVSE silently ignores a
+// non-zero override unless it is already in Normal or Smart mode. With resume set,
+// a paused charger is resumed as well.
+func (smartEvse *SmartEVSE) applyManagedAutoControl(active bool, overrideCurrent float64, resume bool) {
 	smartEvse.managedAutoControlActive = active
 	if active {
 		smartEvse.overrideCurrent = overrideCurrent
@@ -423,15 +431,48 @@ func (smartEvse *SmartEVSE) setManagedAutoControl(active bool, overrideCurrent f
 		smartEvse.overrideCurrent = 0
 	}
 
-	topic := fmt.Sprintf("%s/Set/CurrentOverride", smartEvse.Prefix)
-	payload := fmt.Sprintf("%d", int32(math.RoundToEven(smartEvse.overrideCurrent*10)))
-	smartEvse.publishFullTopic(topic, payload)
-
-	if smartEvse.effectiveManagedMode() == victron.EV_Mode_Auto && !smartEvse.isPaused() {
+	if smartEvse.effectiveManagedMode() == victron.EV_Mode_Auto && (resume || !smartEvse.isPaused()) {
 		smartEvse.requestRunningMode(smartEvse.targetStrategyForManagedMode())
+	} else {
+		smartEvse.syncVictronState()
+	}
+	smartEvse.publishOverrideCurrent()
+}
+
+// overrideDeciAmps is the override as sent to the SmartEVSE. Non-zero values are kept
+// within MinCurrent..MaxCurrent, the SmartEVSE drops values outside that range.
+func (smartEvse *SmartEVSE) overrideDeciAmps() int32 {
+	current := smartEvse.overrideCurrent
+	if current > 0 {
+		if smartEvse.currentMin > 0 {
+			current = math.Max(current, smartEvse.currentMin)
+		}
+		if smartEvse.currentMax > 0 {
+			current = math.Min(current, smartEvse.currentMax)
+		}
+	}
+	return int32(math.RoundToEven(current * 10))
+}
+
+func (smartEvse *SmartEVSE) publishOverrideCurrent() {
+	topic := fmt.Sprintf("%s/Set/CurrentOverride", smartEvse.Prefix)
+	smartEvse.publishFullTopic(topic, fmt.Sprintf("%d", smartEvse.overrideDeciAmps()))
+}
+
+// overrideReported handles ChargeCurrentOverride from the SmartEVSE. During managed
+// control the bridge owns the override and sends it again when the SmartEVSE reports
+// another value (e.g. it was dropped because the mode was not Smart yet).
+func (smartEvse *SmartEVSE) overrideReported(deciAmps float64) {
+	if !smartEvse.managedAutoControlActive {
+		smartEvse.overrideCurrent = deciAmps / 10
 		return
 	}
-	smartEvse.syncVictronState()
+	want := smartEvse.overrideDeciAmps()
+	if want == 0 || smartEvse.isPaused() || smartEvse.mode != "Smart" || int32(deciAmps) == want {
+		return
+	}
+	log.Printf("%s: SmartEVSE reports override %.1fA, sending %.1fA again", smartEvse.Name, deciAmps/10, float64(want)/10)
+	smartEvse.publishOverrideCurrent()
 }
 
 func (smartEvse *SmartEVSE) clearManagedAutoControl() {
@@ -539,8 +580,8 @@ func (smartEvse *SmartEVSE) mqttReceived(topic string, value string) {
 		smartEvse.victronEvcs.SetCurrentLimits(smartEvse.currentMin, current, smartEvse.currentMax)
 	case "ChargeCurrent":
 		smartEvse.victronEvcs.SetChargeCurrent(i / 10)
-	case "CurrentOverride":
-		smartEvse.overrideCurrent = i / 10
+	case "ChargeCurrentOverride":
+		smartEvse.overrideReported(i)
 	case "EVChargePower":
 		smartEvse.victronEvcs.SetAcPower(i)
 	case "EVEnergyCharged":

@@ -305,8 +305,9 @@ func TestMQTTToDBusE2E_AutoModeSwitchesBetweenSolarAndSmartOnManagedAutoControl(
 	ev.mqttReceived("SmartEVSE/Mode", "Solar")
 	ev.setManagedAutoControl(true, 12)
 	require.Len(t, *messages, 3)
-	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/CurrentOverride", payload: "120"}, (*messages)[1])
-	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/Mode", payload: "Smart"}, (*messages)[2])
+	// mode first: the SmartEVSE ignores an override unless it is in Smart (or Normal) mode
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/Mode", payload: "Smart"}, (*messages)[1])
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/CurrentOverride", payload: "120"}, (*messages)[2])
 
 	ev.mqttReceived("SmartEVSE/Mode", "Smart")
 	assert.Equal(t, int32(victron.EV_Mode_Auto), requirePathValue[int32](t, "/Mode", fakeConn))
@@ -314,16 +315,16 @@ func TestMQTTToDBusE2E_AutoModeSwitchesBetweenSolarAndSmartOnManagedAutoControl(
 
 	ev.setManagedAutoControl(true, 32)
 	require.Len(t, *messages, 5)
-	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/CurrentOverride", payload: "320"}, (*messages)[3])
-	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/Mode", payload: "Smart"}, (*messages)[4])
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/Mode", payload: "Smart"}, (*messages)[3])
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/CurrentOverride", payload: "320"}, (*messages)[4])
 	assert.Equal(t, 32.0, ev.overrideCurrent)
 	assert.Equal(t, int32(victron.EV_Mode_Auto), requirePathValue[int32](t, "/Mode", fakeConn))
 	assert.Equal(t, "Auto", requirePathText(t, "/Mode", fakeConn))
 
 	ev.clearManagedAutoControl()
 	require.Len(t, *messages, 7)
-	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/CurrentOverride", payload: "0"}, (*messages)[5])
-	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/Mode", payload: "Solar"}, (*messages)[6])
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/Mode", payload: "Solar"}, (*messages)[5])
+	assert.Equal(t, publishedMessage{topic: "SmartEVSE/Set/CurrentOverride", payload: "0"}, (*messages)[6])
 	assert.Equal(t, 0.0, ev.overrideCurrent)
 	assert.Equal(t, int32(victron.EV_Mode_Auto), requirePathValue[int32](t, "/Mode", fakeConn))
 	assert.Equal(t, "Auto", requirePathText(t, "/Mode", fakeConn))
@@ -422,7 +423,7 @@ func TestMQTTToDBusE2E_FloatTopicScaling(t *testing.T) {
 	ev.mqttReceived("SmartEVSE/ChargeCurrent", "165")
 	assert.InDelta(t, 16.5, requirePathValue[float64](t, "/Current", fakeConn), 0.0001)
 
-	ev.mqttReceived("SmartEVSE/CurrentOverride", "85")
+	ev.mqttReceived("SmartEVSE/ChargeCurrentOverride", "85")
 	assert.Equal(t, 8.5, ev.overrideCurrent)
 
 	ev.mqttReceived("SmartEVSE/EVChargePower", "3450")
